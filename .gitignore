@@ -1,0 +1,7 @@
+.env.backend
+.env.frontend
+__pycache__/
+*.pyc
+.next/
+node_modules/
+postgres_data/

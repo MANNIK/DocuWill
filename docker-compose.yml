@@ -1,0 +1,75 @@
+services:
+
+  db:
+    image: postgres:16
+    env_file: .env.backend
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  backend:
+    build: ./backend
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    env_file: .env.backend
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.local
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_worker: &celery
+    build: ./backend
+    command: /bin/sh /scripts/start-worker.sh
+    volumes:
+      - ./backend:/app
+      - ./scripts:/scripts
+    env_file: .env.backend
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery_beat:
+    <<: *celery
+    command: /bin/sh /scripts/start-beat.sh
+
+  ai_service:
+    build: ./ai_service
+    command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+    volumes:
+      - ./ai_service:/app
+    ports:
+      - "8001:8001"
+    env_file: .env.backend
+
+  frontend:
+    build: ./frontend
+    command: npm run dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    env_file: .env.frontend
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
