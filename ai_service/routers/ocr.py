@@ -1,14 +1,13 @@
-import base64
-import httpx
-import anthropic
+# Sostituisci tutto il file con questo
 import os
+from openai import OpenAI
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any
+import json
 
 router = APIRouter(prefix="/ocr", tags=["OCR"])
-
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
 class OCRRequest(BaseModel):
@@ -28,94 +27,64 @@ class OCRResult(BaseModel):
 
 @router.post("/image", response_model=OCRResult)
 async def ocr_image(request: OCRRequest):
-    """
-    Scarica l'immagine e usa Claude Vision per estrarre
-    i dati strutturati dal documento fotografato.
-    """
-    # Scarica l'immagine
-    try:
-        async with httpx.AsyncClient(timeout=30) as http:
-            response = await http.get(request.image_url)
-            response.raise_for_status()
-            image_data = base64.standard_b64encode(response.content).decode("utf-8")
-            content_type = response.headers.get("content-type", "image/jpeg")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Impossibile scaricare l'immagine: {e}")
-
     prompt = """Sei un sistema OCR specializzato in documenti aziendali italiani.
-Analizza questa immagine di un documento (fattura, DDT, ordine, tariffario, packing list, ecc.)
+Analizza questa immagine di un documento (fattura, DDT, ordine, tariffario, ecc.)
 ed estrai tutti i dati strutturati.
 
-Rispondi SOLO con un JSON valido, nessun testo prima o dopo, con questa struttura esatta:
+Rispondi SOLO con JSON valido, nessun testo prima o dopo:
 {
   "doc_type": "invoice|ddt|order|price_list|packing_list|shipment|confirmation|unknown",
-  "supplier_name": "nome fornitore o azienda emittente",
+  "supplier_name": "nome fornitore",
   "document_number": "numero documento",
-  "document_date": "data in formato YYYY-MM-DD o stringa originale",
+  "document_date": "YYYY-MM-DD o stringa originale",
   "total_amount": numero o null,
   "rows": [
     {
       "row_index": 0,
-      "item_code": "codice articolo",
-      "description": "descrizione prodotto",
+      "item_code": "codice",
+      "description": "descrizione",
       "quantity": numero o null,
-      "unit": "pz|kg|l|m|scatola|ecc",
+      "unit": "pz|kg|l|m|ecc",
       "unit_price": numero o null,
       "total_price": numero o null,
-      "discount": numero percentuale o null
+      "discount": numero o null
     }
   ],
-  "raw_text": "tutto il testo estratto dal documento"
-}
-
-Note importanti:
-- Se un campo non è presente nel documento, usa null o stringa vuota
-- I numeri devono essere float, non stringhe
-- Estrai TUTTE le righe della tabella, anche se sono molte
-- Per doc_type usa solo i valori elencati sopra
-"""
+  "raw_text": "tutto il testo estratto"
+}"""
 
     try:
-        message = client.messages.create(
-            model="claude-opus-4-5",
+        message = client.chat.completions.create(
+            model="gpt-4o",
             max_tokens=4096,
             messages=[
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": content_type,
-                                "data": image_data,
-                            },
+                            "type": "image_url",
+                            "image_url": {"url": request.image_url},
                         },
                         {
                             "type": "text",
-                            "text": prompt + (f"\n\nCaption del mittente: {request.caption}" if request.caption else ""),
+                            "text": prompt + (f"\n\nCaption: {request.caption}" if request.caption else ""),
                         },
                     ],
                 }
             ],
         )
 
-        raw_response = message.content[0].text
+        raw = message.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
 
-        # Pulisci eventuali backtick markdown
-        clean = raw_response.strip()
-        if clean.startswith("```"):
-            clean = clean.split("```")[1]
-            if clean.startswith("json"):
-                clean = clean[4:]
-        clean = clean.strip()
-
-        import json
-        data = json.loads(clean)
-
+        data = json.loads(raw)
         return OCRResult(**data)
 
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Claude ha restituito JSON non valido: {e}")
+        raise HTTPException(status_code=500, detail=f"JSON non valido: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore OCR: {str(e)}")

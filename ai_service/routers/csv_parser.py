@@ -1,15 +1,14 @@
 import io
 import json
 import os
-import anthropic
+from openai import OpenAI
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Any
 
 router = APIRouter(prefix="/parse", tags=["CSV Parser"])
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 class ParsedRow(BaseModel):
     row_index: int
@@ -130,13 +129,13 @@ Regole:
 - Non inventare dati: se un campo non è presente, lascialo vuoto o null
 """
 
-    message = client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
+    message = client.chat.completions.create(
+    model="gpt-4o",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": prompt}],
     )
 
-    raw = message.content[0].text.strip()
+    raw = message.choices[0].message.content.strip()
 
     # Rimuovi eventuali backtick markdown
     if raw.startswith("```"):

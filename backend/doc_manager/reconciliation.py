@@ -1,10 +1,9 @@
 import json
 import os
-import anthropic
+from openai import OpenAI
 from .models import Document, Reconciliation, Discrepancy
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # ─────────────────────────────────────────────
 # LIVELLO 1 — Match matematico esatto
@@ -177,13 +176,13 @@ Rispondi SOLO con JSON valido:
 }}
 """
 
-    message = client.messages.create(
-        model="claude-opus-4-5",
+    message = client.chat.completions.create(
+        model="gpt-4o",
         max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
 
-    raw = message.content[0].text.strip()
+    raw = message.choices[0].message.content.strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):

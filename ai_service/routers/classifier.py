@@ -1,4 +1,4 @@
-import anthropic
+from openai import OpenAI
 import os
 import json
 from fastapi import APIRouter, HTTPException
@@ -7,8 +7,7 @@ from typing import Any
 
 router = APIRouter(prefix="/classify", tags=["Classifier"])
 
-client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
-
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 class ClassifyRequest(BaseModel):
     extracted_data: dict[str, Any]
@@ -43,13 +42,13 @@ Rispondi SOLO con JSON valido:
 """
 
     try:
-        message = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=256,
-            messages=[{"role": "user", "content": prompt}],
+        message = client.chat.completions.create(
+        model="gpt-4o",
+        max_tokens=256,
+        messages=[{"role": "user", "content": prompt}],
         )
 
-        clean = message.content[0].text.strip()
+        clean = message.choices[0].message.content.strip()
         if clean.startswith("```"):
             clean = clean.split("```")[1]
             if clean.startswith("json"):
