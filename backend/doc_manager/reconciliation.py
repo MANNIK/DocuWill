@@ -130,37 +130,62 @@ def level2_semantic_check(
     discrepancies: list[dict],
 ) -> list[dict]:
     """
-    Claude riceve i due documenti e le discrepanze già trovate.
-    Il suo compito non è trovarne di nuove — è valutare se quelle
-    trovate sono errori reali o rappresentazioni diverse della stessa cosa.
-    Aggiorna la severity di conseguenza.
+    Manda a GPT solo le righe coinvolte nelle discrepanze,
+    non l'intero documento.
     """
-    prompt = f"""Sei un esperto di documenti aziendali italiani.
-Un sistema automatico ha confrontato questi due documenti e ha trovato
-delle discrepanze. Il tuo compito è valutare ogni discrepanza e decidere
-se è un errore reale oppure solo una rappresentazione diversa della stessa cosa.
+    # Estrai solo i codici articolo coinvolti nelle discrepanze
+    involved_keys = set()
+    for d in discrepancies:
+        if d.get("value_doc1"):
+            involved_keys.add(d["value_doc1"])
+        if d.get("value_doc2"):
+            involved_keys.add(d["value_doc2"])
 
-DOCUMENTO 1 (tipo: {doc1.doc_type}, fonte: {doc1.source}):
-{json.dumps(serialize_document_for_claude(doc1), ensure_ascii=False, indent=2)}
+    # Filtra solo le righe rilevanti
+    def get_relevant_rows(doc: Document) -> list[dict]:
+        rows = []
+        for row in doc.rows.all():
+            key = row.item_code or row.description
+            # Includi la riga solo se è coinvolta in una discrepanza
+            if key in involved_keys or not involved_keys:
+                row_data = {}
+                if row.item_code:
+                    row_data["item_code"] = row.item_code
+                if row.description:
+                    row_data["description"] = row.description
+                if row.quantity is not None:
+                    row_data["quantity"] = float(row.quantity)
+                if row.unit_price is not None:
+                    row_data["unit_price"] = float(row.unit_price)
+                if row.unit:
+                    row_data["unit"] = row.unit
+                if row.discount is not None:
+                    row_data["discount"] = float(row.discount)
+                rows.append(row_data)
+        return rows
 
-DOCUMENTO 2 (tipo: {doc2.doc_type}, fonte: {doc2.source}):
-{json.dumps(serialize_document_for_claude(doc2), ensure_ascii=False, indent=2)}
+    # Contesto minimo — solo metadati e righe rilevanti
+    doc1_context = {
+        "doc_type": doc1.doc_type,
+        "supplier": doc1.supplier_name,
+        "rows": get_relevant_rows(doc1),
+    }
+    doc2_context = {
+        "doc_type": doc2.doc_type,
+        "supplier": doc2.supplier_name,
+        "rows": get_relevant_rows(doc2),
+    }
 
-DISCREPANZE TROVATE DAL SISTEMA:
+    prompt = f"""Valuta queste discrepanze trovate tra due documenti aziendali.
+Per ogni discrepanza decidi se è un errore reale o rappresentazioni diverse della stessa cosa.
+
+DOCUMENTO 1: {json.dumps(doc1_context, ensure_ascii=False)}
+DOCUMENTO 2: {json.dumps(doc2_context, ensure_ascii=False)}
+
+DISCREPANZE DA VALUTARE:
 {json.dumps(discrepancies, ensure_ascii=False, indent=2)}
 
-Per ogni discrepanza aggiorna la severity:
-- "error" → differenza reale che richiede intervento umano
-- "warning" → probabilmente la stessa cosa rappresentata diversamente
-- "info" → differenza marginale, non bloccante
-
-Esempi di ragionamento:
-- "Bulloni M6 zincati" vs "M6-ZN-BLT" → stesso articolo, severity: warning
-- quantità 10 vs 8 → errore reale, severity: error
-- "100 pz" vs "1 scatola da 100" → equivalenti, severity: info
-- prezzo 9.99 vs 10.00 → verifica se è arrotondamento o errore reale
-
-Rispondi SOLO con JSON valido:
+Rispondi SOLO con JSON:
 {{
   "discrepancies": [
     {{
@@ -169,16 +194,16 @@ Rispondi SOLO con JSON valido:
       "value_doc1": "...",
       "value_doc2": "...",
       "severity": "error|warning|info",
-      "note": "spiegazione breve"
+      "note": "spiegazione"
     }}
   ],
-  "summary": "cosa hai trovato in una frase"
+  "summary": "una frase"
 }}
 """
 
     message = client.chat.completions.create(
         model="gpt-4o",
-        max_tokens=2048,
+        max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -187,9 +212,8 @@ Rispondi SOLO con JSON valido:
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    raw = raw.strip()
 
-    result = json.loads(raw)
+    result = json.loads(raw.strip())
     return result.get("discrepancies", discrepancies)
 
 
@@ -268,6 +292,7 @@ def claude_reconcile(doc1: Document, doc2: Document) -> tuple[list[dict], int]:
 def compute_match_score(doc_a: Document, doc_b: Document) -> int:
     score = 0
 
+    # Numero documento identico (peso massimo)
     if (
         doc_a.document_number
         and doc_b.document_number
@@ -275,6 +300,7 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
     ):
         score += 50
 
+    # Stesso fornitore
     if (
         doc_a.supplier_name
         and doc_b.supplier_name
@@ -282,10 +308,12 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
     ):
         score += 30
 
+    # Stessa data
     if doc_a.document_date and doc_b.document_date:
         if doc_a.document_date == doc_b.document_date:
             score += 10
 
+    # Totali simili
     if doc_a.total_amount and doc_b.total_amount:
         diff = abs(doc_a.total_amount - doc_b.total_amount)
         max_val = max(doc_a.total_amount, doc_b.total_amount)
@@ -294,14 +322,34 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
         elif diff / max_val < 0.1:
             score += 5
 
+    # Articoli in comune — criterio di fallback fondamentale
+    codes_a = set(
+        r.item_code.strip()
+        for r in doc_a.rows.all()
+        if r.item_code and r.item_code.strip()
+    )
+    codes_b = set(
+        r.item_code.strip()
+        for r in doc_b.rows.all()
+        if r.item_code and r.item_code.strip()
+    )
+
+    if codes_a and codes_b:
+        common = codes_a & codes_b
+        total = codes_a | codes_b
+        overlap = len(common) / len(total)  # Jaccard similarity
+
+        if overlap >= 0.8:
+            score += 40  # quasi tutti gli articoli coincidono
+        elif overlap >= 0.5:
+            score += 25
+        elif overlap >= 0.2:
+            score += 10
+
     return min(score, 100)
 
 
 def find_and_reconcile(new_doc: Document):
-    """
-    Chiamato dal task Celery dopo che un documento è stato processato.
-    Cerca il miglior candidato e avvia la cascata di riconciliazione.
-    """
     candidates = Document.objects.filter(
         status=Document.StatusChoices.PROCESSED,
     ).exclude(id=new_doc.id)
@@ -318,12 +366,20 @@ def find_and_reconcile(new_doc: Document):
         if already_exists:
             continue
 
+        # Stesso filename = duplicato, salta sempre
+        if candidate.original_filename == new_doc.original_filename:
+            continue
+
+        # Claude decide se la coppia ha senso
+        if not are_documents_complementary(new_doc, candidate):
+            continue
+
         score = compute_match_score(new_doc, candidate)
         if score > best_score:
             best_score = score
             best_match = candidate
 
-    if best_score < 40 or best_match is None:
+    if best_score < 30 or best_match is None:
         return
 
     if new_doc.created_at < best_match.created_at:
@@ -331,7 +387,6 @@ def find_and_reconcile(new_doc: Document):
     else:
         doc1, doc2 = best_match, new_doc
 
-    # Cascata livello 1 + 2
     discrepancies, confidence_adjustment = claude_reconcile(doc1, doc2)
 
     reconciliation = Reconciliation.objects.create(
@@ -354,5 +409,49 @@ def find_and_reconcile(new_doc: Document):
         for d in discrepancies
     ])
 
-    # Livello 3 — decisione finale
     level3_decide(reconciliation)
+
+
+# VERIFICA SE DOCUMENTI COMPLEMENTARI
+def are_documents_complementary(doc_a: Document, doc_b: Document) -> bool:
+    """
+    Chiede a Claude se due documenti hanno senso come coppia.
+    Nessuna lista fissa — Claude ragiona sul contesto.
+    """
+    prompt = f"""Hai due documenti aziendali. Dimmi se ha senso riconciliarli insieme,
+    cioè se uno potrebbe essere la risposta, conferma o contropartita dell'altro.
+
+    DOCUMENTO A: tipo={doc_a.doc_type}, fonte={doc_a.source}, 
+                fornitore={doc_a.supplier_name}, filename={doc_a.original_filename}
+
+    DOCUMENTO B: tipo={doc_b.doc_type}, fonte={doc_b.source},
+                fornitore={doc_b.supplier_name}, filename={doc_b.original_filename}
+
+    Esempi di coppie che hanno senso: ordine+fattura, ordine+DDT, tariffario+conferma prezzi,
+    spedizione+fattura corriere, ordine+packing list.
+
+    Esempi di coppie che NON hanno senso: ordine+ordine, fattura+fattura, due file identici.
+
+    Rispondi SOLO con JSON:
+    {{
+    "complementary": true/false,
+    "reasoning": "spiegazione breve"
+    }}
+    """
+
+    try:
+        message = client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=150,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw.strip())
+        return result.get("complementary", True)
+    except Exception:
+        # Se Claude non risponde, non bloccare — lascia passare
+        return True

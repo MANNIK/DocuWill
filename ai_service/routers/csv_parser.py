@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 from openai import OpenAI
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, HTTPException
@@ -9,6 +10,7 @@ from typing import Any
 
 router = APIRouter(prefix="/parse", tags=["CSV Parser"])
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
 
 class ParsedRow(BaseModel):
     row_index: int
@@ -32,25 +34,35 @@ class ParsedDocument(BaseModel):
     raw_extracted: dict[str, Any] = {}
 
 
+class ParsedDocumentList(BaseModel):
+    documents: list[ParsedDocument] = []
+    total_sections: int = 0
+
+
 def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
-    """
-    Legge il file senza assumere niente sulla struttura.
-    Restituisce una lista di righe grezze.
-    """
     try:
         if filename.endswith(".csv"):
             for encoding in ["utf-8", "latin-1", "cp1252"]:
                 try:
-                    df = pd.read_csv(
-                        io.BytesIO(content),
-                        header=None,
-                        encoding=encoding,
-                        dtype=str,  # tutto come stringa, nessuna conversione automatica
-                    )
-                    return df.fillna("").values.tolist()
+                    text = content.decode(encoding)
+                    break
                 except UnicodeDecodeError:
                     continue
-            raise HTTPException(status_code=400, detail="Encoding del file non riconoscibile.")
+            else:
+                raise HTTPException(status_code=400, detail="Encoding non riconoscibile.")
+
+            lines = [l for l in text.splitlines() if l.strip()]
+            separators = [",", ";", "\t", "|"]
+            sep_counts = {s: sum(line.count(s) for line in lines) for s in separators}
+            sep = max(sep_counts, key=sep_counts.get)
+            if sep_counts[sep] == 0:
+                sep = ","
+
+            rows = []
+            for line in lines:
+                cells = line.split(sep)
+                rows.append([c.strip() for c in cells])
+            return rows
 
         elif filename.endswith((".xlsx", ".xls")):
             xls = pd.ExcelFile(io.BytesIO(content))
@@ -62,8 +74,7 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
                     header=None,
                     dtype=str,
                 )
-                sheet_rows = df.fillna("").values.tolist()
-                all_rows.extend(sheet_rows)
+                all_rows.extend(df.fillna("").values.tolist())
             return all_rows
 
         else:
@@ -77,67 +88,73 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
         raise HTTPException(status_code=500, detail=f"Errore lettura file: {e}")
 
 
-def rows_to_text(raw_rows: list[list[Any]], max_rows: int = 30) -> str:
-    """
-    Converte le prime N righe in testo tabellare leggibile da Claude.
-    """
+def rows_to_text(raw_rows: list[list[Any]], max_rows: int = 50) -> str:
     lines = []
     for i, row in enumerate(raw_rows[:max_rows]):
         cells = [str(cell).strip() for cell in row]
-        # Salta righe completamente vuote
         if not any(cells):
             continue
         lines.append(f"Riga {i}: {' | '.join(cells)}")
     return "\n".join(lines)
 
 
-def ask_claude_to_understand_structure(preview_text: str, filename: str) -> dict:
+def ask_claude_to_understand_structure(preview_text: str, filename: str) -> list[dict]:
     """
-    Manda l'anteprima del file a Claude e chiede di capire la struttura.
-    Claude restituisce: quale riga è l'header, il mapping delle colonne,
-    i metadati del documento, e il tipo di documento.
+    Chiede a GPT di identificare tutte le sezioni del file.
+    Restituisce una lista di strutture — una per sezione.
     """
-    prompt = f"""Sei un esperto di documenti aziendali. Ti mostro le prime righe di un file
-chiamato "{filename}". Analizza la struttura e restituisci le informazioni richieste.
+    prompt = f"""Sei un esperto di documenti aziendali. Analizza questo file
+chiamato "{filename}" e identifica TUTTE le sezioni di dati presenti.
+
+Un file può contenere più tabelle o sezioni separate — per esempio
+ordini di fornitori diversi, o una tabella dati + una tabella riepilogo.
 
 CONTENUTO DEL FILE:
 {preview_text}
 
 Rispondi SOLO con JSON valido, nessun testo prima o dopo:
 {{
-  "header_row_index": <numero della riga che contiene le intestazioni delle colonne, o null se non c'è>,
-  "data_start_row_index": <numero della prima riga con dati veri (dopo l'header)>,
-  "column_mapping": {{
-    <indice colonna come stringa>: "item_code|description|quantity|unit|unit_price|total_price|discount|ignore"
-  }},
-  "metadata": {{
-    "supplier_name": "<nome fornitore/azienda se presente, altrimenti stringa vuota>",
-    "document_number": "<numero documento se presente, altrimenti stringa vuota>",
-    "document_date": "<data documento in formato YYYY-MM-DD se presente, altrimenti stringa vuota>",
-    "total_amount": <totale documento come numero se presente, altrimenti null>
-  }},
-  "doc_type": "order|invoice|ddt|price_list|packing_list|shipment|confirmation|unknown",
-  "doc_type_confidence": <numero da 0 a 100>,
-  "notes": "<eventuali osservazioni sulla struttura del file>"
+  "sections": [
+    {{
+      "section_name": "nome descrittivo della sezione",
+      "header_row_index": <indice riga header o null>,
+      "data_row_indices": [<indici esatti delle righe con dati reali>],
+      "column_mapping": {{
+        "<indice colonna>": "item_code|description|quantity|unit|unit_price|total_price|discount|ignore"
+      }},
+      "metadata": {{
+        "supplier_name": "",
+        "document_number": "",
+        "document_date": "",
+        "total_amount": null
+      }},
+      "doc_type": "order|invoice|ddt|price_list|packing_list|shipment|confirmation|unknown",
+      "doc_type_confidence": <0-100>,
+      "notes": ""
+    }}
+  ]
 }}
 
 Regole:
-- column_mapping deve coprire TUTTE le colonne presenti (usa "ignore" per quelle non rilevanti)
-- Le colonne vengono identificate per indice numerico (0, 1, 2, ...)
-- Se ci sono più sheet o sezioni, considera quella principale con i dati di riga
-- Se il totale è nelle righe finali (es. "Totale: 1234.56"), estrailo nei metadata
-- Non inventare dati: se un campo non è presente, lascialo vuoto o null
+- Crea una sezione separata per ogni fornitore diverso, ogni tipo di documento diverso,
+  ogni tabella logicamente indipendente
+- Escludi da data_row_indices: titoli, header, righe vuote, totali/riepiloghi
+- Se il file ha una sola tabella, restituisci sections con un solo elemento
+- Le sezioni di riepilogo sono sezioni separate solo se contengono dati utili,
+  altrimenti ignorale
+- Non sovrapporre data_row_indices tra sezioni diverse
+- Per documenti con colonne "Qty per Box" e "Total Qty", mappa sempre
+  "quantity" sulla colonna del totale (Total Qty/Qtà Totale), non sulla
+  quantità unitaria per collo
 """
 
     message = client.chat.completions.create(
-    model="gpt-4o",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": prompt}],
+        model="gpt-4o",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": prompt}],
     )
 
     raw = message.choices[0].message.content.strip()
-
-    # Rimuovi eventuali backtick markdown
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -145,35 +162,60 @@ Regole:
     raw = raw.strip()
 
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
+        return result.get("sections", [])
     except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=500,
-            detail=f"Claude ha restituito una struttura non valida: {e}\nRisposta: {raw[:200]}"
+            detail=f"Struttura non valida: {e}\nRisposta: {raw[:200]}"
         )
+
+
+def parse_number(value: str) -> float | None:
+    if not value:
+        return None
+    text = value.strip()
+    text = re.sub(r"[€$£\s%]", "", text)
+    if not text or text in ("-", "N/A", "n/a"):
+        return None
+    if "," in text and "." in text:
+        if text.rindex(",") > text.rindex("."):
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    elif "," in text:
+        parts = text.split(",")
+        if len(parts) == 2 and len(parts[1]) <= 2:
+            text = text.replace(",", ".")
+        else:
+            text = text.replace(",", "")
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 def extract_rows(
     raw_rows: list[list[Any]],
     data_start: int,
     column_mapping: dict[str, str],
+    data_row_indices: list[int] | None = None,
 ) -> list[ParsedRow]:
-    """
-    Usa il mapping fornito da Claude per estrarre le righe dati.
-    """
     parsed_rows = []
     row_counter = 0
 
     for i, row in enumerate(raw_rows):
-        if i < data_start:
-            continue
+        if data_row_indices is not None:
+            if i not in data_row_indices:
+                continue
+        else:
+            if i < data_start:
+                continue
 
-        # Salta righe completamente vuote
         cells = [str(c).strip() for c in row]
         if not any(cells):
             continue
 
-        # Costruisci i campi standard dal mapping
         fields: dict[str, Any] = {
             "item_code": "",
             "description": "",
@@ -201,12 +243,6 @@ def extract_rows(
             elif field_name in fields:
                 fields[field_name] = cell_value[:500]
 
-        # Salta righe che sembrano totali/riepilogo
-        desc = fields.get("description", "").lower()
-        if any(k in desc for k in ["totale", "subtotale", "grand total", "subtotal"]):
-            continue
-
-        # Salta righe senza nessun dato utile
         has_data = any([
             fields["item_code"],
             fields["description"],
@@ -226,42 +262,11 @@ def extract_rows(
     return parsed_rows
 
 
-def parse_number(value: str) -> float | None:
-    """
-    Converte una stringa in numero gestendo formati europei e americani.
-    Lascia fare a Python, non a keyword.
-    """
-    if not value:
-        return None
-    text = value.strip()
-    # Rimuovi simboli valuta, spazi, caratteri non numerici tranne , . -
-    import re
-    text = re.sub(r"[€$£\s%]", "", text)
-    if not text or text in ("-", "N/A", "n/a"):
-        return None
-    # Formato europeo: 1.234,56
-    if "," in text and "." in text:
-        if text.rindex(",") > text.rindex("."):
-            text = text.replace(".", "").replace(",", ".")
-        else:
-            text = text.replace(",", "")
-    elif "," in text:
-        parts = text.split(",")
-        if len(parts) == 2 and len(parts[1]) <= 2:
-            text = text.replace(",", ".")
-        else:
-            text = text.replace(",", "")
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
-@router.post("/csv", response_model=ParsedDocument)
+@router.post("/csv", response_model=ParsedDocumentList)
 async def parse_csv_excel(file: UploadFile = File(...)):
     """
     Riceve un file CSV o Excel di qualsiasi formato e struttura.
-    Usa Claude per capire la struttura del documento, poi estrae i dati.
+    Restituisce uno o più documenti — uno per sezione logica trovata.
     Funziona con qualsiasi lingua, layout, fornitore.
     """
     content = await file.read()
@@ -269,44 +274,56 @@ async def parse_csv_excel(file: UploadFile = File(...)):
 
     # 1. Leggi il file grezzo senza assumere niente
     raw_rows = read_raw_file(content, filename)
-
     if not raw_rows:
         raise HTTPException(status_code=400, detail="Il file è vuoto.")
 
-    # 2. Prepara anteprima per Claude (prime 30 righe)
-    preview = rows_to_text(raw_rows, max_rows=30)
+    # 2. Anteprima per GPT
+    preview = rows_to_text(raw_rows, max_rows=50)
 
-    # 3. Chiedi a Claude di capire la struttura
-    structure = ask_claude_to_understand_structure(preview, filename)
+    # 3. GPT identifica tutte le sezioni
+    sections = ask_claude_to_understand_structure(preview, filename)
+    if not sections:
+        raise HTTPException(status_code=422, detail="Nessuna sezione dati trovata nel file.")
 
-    # 4. Estrai le righe usando il mapping di Claude
-    data_start = structure.get("data_start_row_index", 1)
-    column_mapping = {
-        str(k): v
-        for k, v in structure.get("column_mapping", {}).items()
-    }
+    # 4. Crea un ParsedDocument per ogni sezione
+    documents = []
+    for section in sections:
+        column_mapping = {
+            str(k): v
+            for k, v in section.get("column_mapping", {}).items()
+        }
 
-    rows = extract_rows(raw_rows, data_start, column_mapping)
+        rows = extract_rows(
+            raw_rows,
+            data_start=section.get("data_start_row_index", 0),
+            column_mapping=column_mapping,
+            data_row_indices=section.get("data_row_indices"),
+        )
 
-    # 5. Calcola totale se non già nei metadata
-    metadata = structure.get("metadata", {})
-    total = metadata.get("total_amount")
-    if total is None:
-        calculated = sum(r.total_price for r in rows if r.total_price is not None)
-        total = calculated if calculated else None
+        metadata = section.get("metadata", {})
+        total = metadata.get("total_amount")
+        if total is None:
+            calculated = sum(r.total_price for r in rows if r.total_price is not None)
+            total = calculated if calculated else None
 
-    return ParsedDocument(
-        doc_type=structure.get("doc_type", "unknown"),
-        supplier_name=metadata.get("supplier_name", ""),
-        document_number=metadata.get("document_number", ""),
-        document_date=metadata.get("document_date", ""),
-        total_amount=total,
-        rows=rows,
-        raw_extracted={
-            "filename": filename,
-            "total_rows": len(rows),
-            "doc_type_confidence": structure.get("doc_type_confidence", 0),
-            "structure_notes": structure.get("notes", ""),
-            "claude_structure": structure,
-        },
+        documents.append(ParsedDocument(
+            doc_type=section.get("doc_type", "unknown"),
+            supplier_name=metadata.get("supplier_name", ""),
+            document_number=metadata.get("document_number", ""),
+            document_date=metadata.get("document_date", ""),
+            total_amount=total,
+            rows=rows,
+            raw_extracted={
+                "filename": filename,
+                "section_name": section.get("section_name", ""),
+                "total_rows": len(rows),
+                "doc_type_confidence": section.get("doc_type_confidence", 0),
+                "structure_notes": section.get("notes", ""),
+                "claude_structure": section,
+            },
+        ))
+
+    return ParsedDocumentList(
+        documents=documents,
+        total_sections=len(documents),
     )
