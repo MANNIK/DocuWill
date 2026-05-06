@@ -62,11 +62,12 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
             for line in lines:
                 cells = line.split(sep)
                 rows.append([c.strip() for c in cells])
-            return rows
+            # CSV → lista singola avvolta in lista (un solo "sheet")
+            return [rows]
 
         elif filename.endswith((".xlsx", ".xls")):
             xls = pd.ExcelFile(io.BytesIO(content))
-            all_rows = []
+            sheets = []
             for sheet in xls.sheet_names:
                 df = pd.read_excel(
                     io.BytesIO(content),
@@ -74,8 +75,9 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
                     header=None,
                     dtype=str,
                 )
-                all_rows.extend(df.fillna("").values.tolist())
-            return all_rows
+                sheets.append(df.fillna("").values.tolist())
+            # Excel → una lista per sheet
+            return sheets
 
         else:
             raise HTTPException(
@@ -88,13 +90,19 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
         raise HTTPException(status_code=500, detail=f"Errore lettura file: {e}")
 
 
-def rows_to_text(raw_rows: list[list[Any]], max_rows: int = 50) -> str:
+def rows_to_text(sheets: list[list[list[Any]]], max_rows_per_sheet: int = 50) -> str:
     lines = []
-    for i, row in enumerate(raw_rows[:max_rows]):
-        cells = [str(cell).strip() for cell in row]
-        if not any(cells):
-            continue
-        lines.append(f"Riga {i}: {' | '.join(cells)}")
+    global_index = 0
+    for sheet_idx, sheet_rows in enumerate(sheets):
+        if len(sheets) > 1:
+            lines.append(f"--- SHEET {sheet_idx + 1} ---")
+        for row in sheet_rows[:max_rows_per_sheet]:
+            cells = [str(cell).strip() for cell in row]
+            if not any(cells):
+                global_index += 1
+                continue
+            lines.append(f"Riga {global_index}: {' | '.join(cells)}")
+            global_index += 1
     return "\n".join(lines)
 
 
@@ -106,13 +114,12 @@ def ask_claude_to_understand_structure(preview_text: str, filename: str) -> list
     prompt = f"""Sei un esperto di documenti aziendali. Analizza questo file
 chiamato "{filename}" e identifica TUTTE le sezioni di dati presenti.
 
-Un file può contenere più tabelle o sezioni separate — per esempio
-ordini di fornitori diversi, o una tabella dati + una tabella riepilogo.
+Un file può contenere più tabelle o sezioni separate.
 
 CONTENUTO DEL FILE:
 {preview_text}
 
-Rispondi SOLO con JSON valido, nessun testo prima o dopo:
+Rispondi SOLO con JSON valido:
 {{
   "sections": [
     {{
@@ -135,17 +142,30 @@ Rispondi SOLO con JSON valido, nessun testo prima o dopo:
   ]
 }}
 
-Regole:
-- Crea una sezione separata per ogni fornitore diverso, ogni tipo di documento diverso,
-  ogni tabella logicamente indipendente
+Regole sul column_mapping:
+- Mappa OGNI colonna al campo più vicino semanticamente — non usare "ignore"
+  a meno che la colonna sia davvero irrilevante (es. colonne vuote, numeri riga)
+- Per documenti di spedizione: numero spedizione → item_code, mittente/destinatario
+  → description, peso/importo → quantity o total_price
+- Per tariffari: fascia di peso/distanza → description, tariffa base → unit_price,
+  supplemento/percentuale → discount
+- Per colonne "Qty per Box" e "Total Qty", mappa sempre "quantity" sulla
+  colonna del totale (Total Qty), non sulla quantità per collo
+- Se una colonna ha nomi come "Prezzo Scontato" o "Importo Netto" mappala
+  su total_price, non su discount
+
+Regole sulle sezioni:
+- Crea una sezione separata per ogni fornitore diverso, ogni tipo di documento
+  diverso, ogni tabella logicamente indipendente
 - Escludi da data_row_indices: titoli, header, righe vuote, totali/riepiloghi
 - Se il file ha una sola tabella, restituisci sections con un solo elemento
-- Le sezioni di riepilogo sono sezioni separate solo se contengono dati utili,
-  altrimenti ignorale
 - Non sovrapporre data_row_indices tra sezioni diverse
-- Per documenti con colonne "Qty per Box" e "Total Qty", mappa sempre
-  "quantity" sulla colonna del totale (Total Qty/Qtà Totale), non sulla
-  quantità unitaria per collo
+- Se vedi marcatori "--- SHEET N ---", ogni sheet è un foglio Excel separato
+- Per documenti con colonne "Qty per Box"/"Quantità per Collo" E "Total Qty"/
+  "Quantità Totale", mappa SEMPRE "quantity" sulla colonna del totale,
+  non sulla quantità unitaria per collo
+- "Prezzo Scontato", "Importo Netto", "Prezzo Finale" → mappa su total_price,
+  non su discount. "Sconto %" o "% Sconto" → mappa su discount
 """
 
     message = client.chat.completions.create(
@@ -262,30 +282,32 @@ def extract_rows(
     return parsed_rows
 
 
-@router.post("/csv", response_model=ParsedDocumentList)
-async def parse_csv_excel(file: UploadFile = File(...)):
-    """
+"""
     Riceve un file CSV o Excel di qualsiasi formato e struttura.
     Restituisce uno o più documenti — uno per sezione logica trovata.
     Funziona con qualsiasi lingua, layout, fornitore.
     """
+@router.post("/csv", response_model=ParsedDocumentList)
+async def parse_csv_excel(file: UploadFile = File(...)):
     content = await file.read()
     filename = file.filename or "document"
 
-    # 1. Leggi il file grezzo senza assumere niente
-    raw_rows = read_raw_file(content, filename)
-    if not raw_rows:
+    sheets = read_raw_file(content, filename)
+    if not sheets or not any(sheets):
         raise HTTPException(status_code=400, detail="Il file è vuoto.")
 
-    # 2. Anteprima per GPT
-    preview = rows_to_text(raw_rows, max_rows=50)
+    all_rows = []
+    for sheet in sheets:
+        all_rows.extend(sheet)
 
-    # 3. GPT identifica tutte le sezioni
+    # GPT vede solo le prime 50 righe per capire la struttura
+    # ma extract_rows usa TUTTE le righe
+    preview = rows_to_text(sheets, max_rows_per_sheet=50)
     sections = ask_claude_to_understand_structure(preview, filename)
-    if not sections:
-        raise HTTPException(status_code=422, detail="Nessuna sezione dati trovata nel file.")
 
-    # 4. Crea un ParsedDocument per ogni sezione
+    if not sections:
+        raise HTTPException(status_code=422, detail="Nessuna sezione dati trovata.")
+
     documents = []
     for section in sections:
         column_mapping = {
@@ -293,11 +315,42 @@ async def parse_csv_excel(file: UploadFile = File(...)):
             for k, v in section.get("column_mapping", {}).items()
         }
 
+        # Se GPT ha fornito data_row_indices espliciti (campione),
+        # li usiamo solo per capire quali righe sono dati —
+        # poi estendiamo automaticamente fino alla fine del file
+        data_row_indices = section.get("data_row_indices")
+        data_start = section.get("data_start_row_index", 0)
+
+        if data_row_indices:
+            # Calcola il pattern: da dove iniziano i dati veri
+            # e quante righe di "header interno" ci sono tra sezioni
+            first_data_row = min(data_row_indices)
+            
+            # Estendi fino alla fine del file mantenendo lo stesso pattern
+            # Salta le righe che GPT ha escluso all'inizio (header, metadati)
+            all_data_indices = list(range(first_data_row, len(all_rows)))
+            
+            # Filtra le righe che sembrano header o vuote
+            extended_indices = []
+            for i in all_data_indices:
+                if i >= len(all_rows):
+                    break
+                row = all_rows[i]
+                cells = [str(c).strip() for c in row]
+                # Salta righe vuote
+                if not any(cells):
+                    continue
+                # Salta righe che sembrano header
+                # (stesse celle dell'header originale)
+                extended_indices.append(i)
+            
+            data_row_indices = extended_indices
+
         rows = extract_rows(
-            raw_rows,
-            data_start=section.get("data_start_row_index", 0),
+            all_rows,
+            data_start=data_start,
             column_mapping=column_mapping,
-            data_row_indices=section.get("data_row_indices"),
+            data_row_indices=data_row_indices,
         )
 
         metadata = section.get("metadata", {})
