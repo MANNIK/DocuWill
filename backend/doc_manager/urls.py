@@ -5,6 +5,7 @@ urlpatterns = [
     # Documenti
     path("documents/", views.DocumentListView.as_view(), name="document-list"),
     path("documents/upload/", views.DocumentUploadView.as_view(), name="document-upload"),
+    path("documents/upload-image/", views.ImageUploadView.as_view(), name="document-upload-image"),
     path("documents/<int:pk>/", views.DocumentDetailView.as_view(), name="document-detail"),
 
     # Webhook WhatsApp

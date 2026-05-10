@@ -1,13 +1,16 @@
-# Sostituisci tutto il file con questo
-import os
-from openai import OpenAI
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Any
+import base64
 import json
+import os
+from typing import Any
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from openai import OpenAI
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/ocr", tags=["OCR"])
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+_MIME_MAP = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
 class OCRRequest(BaseModel):
@@ -88,3 +91,16 @@ Rispondi SOLO con JSON valido, nessun testo prima o dopo:
         raise HTTPException(status_code=500, detail=f"JSON non valido: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Errore OCR: {str(e)}")
+
+
+@router.post("/upload", response_model=OCRResult)
+async def ocr_upload(file: UploadFile = File(...)):
+    """Accetta un file immagine direttamente (jpg, png, webp) — simula il flusso WhatsApp senza URL pubblico."""
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    mime = _MIME_MAP.get(ext, "image/jpeg")
+    data_url = f"data:{mime};base64,{base64.b64encode(content).decode()}"
+
+    # Riusa esattamente la stessa logica di /ocr/image passando il data-URI come URL
+    fake_request = OCRRequest(image_url=data_url)
+    return await ocr_image(fake_request)

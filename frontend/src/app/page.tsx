@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { getDocuments, getDocument } from '@/lib/api'
 import type { Document } from '@/lib/api'
 import StatusBadge from '@/components/StatusBadge'
@@ -55,13 +56,31 @@ export default function Dashboard() {
     <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Documenti</h1>
-        <p className="text-sm text-gray-500 mt-1">Carica CSV o Excel per avviare la riconciliazione automatica.</p>
+        <p className="text-sm text-gray-500 mt-1">Carica documenti per avviare la riconciliazione automatica.</p>
       </div>
 
-      <div className="mb-8">
-        <UploadZone onUploaded={handleUploaded} />
+      {/* Zone di upload affiancate */}
+      <div className="grid grid-cols-2 gap-4 mb-8">
+        <div>
+          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Doc 1 — File tabulare</p>
+          <UploadZone
+            accept=".csv,.xlsx,.xls"
+            hint="CSV o Excel — .csv, .xlsx, .xls"
+            onUploaded={handleUploaded}
+          />
+        </div>
+        <div>
+          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Doc 2 — Foto documento (simulazione WhatsApp)</p>
+          <UploadZone
+            accept=".jpg,.jpeg,.png,.webp"
+            hint="Foto del documento cartaceo — .jpg, .png, .webp"
+            onUploaded={handleUploaded}
+            imageMode
+          />
+        </div>
       </div>
 
+      {/* Tabella documenti */}
       {loading ? (
         <p className="text-sm text-gray-400">Caricamento...</p>
       ) : docs.length === 0 ? (
@@ -71,7 +90,7 @@ export default function Dashboard() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                {['File', 'Tipo', 'Fornitore', 'Numero doc', 'Totale', 'Status', 'Caricato'].map(h => (
+                {['File', 'Tipo', 'Fornitore', 'Numero doc', 'Totale', 'Fonte', 'Status', 'Caricato', ''].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -79,13 +98,16 @@ export default function Dashboard() {
             <tbody className="divide-y divide-gray-100">
               {docs.map(doc => (
                 <tr key={doc.id} className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-40 truncate" title={doc.original_filename}>
+                  <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-36 truncate" title={doc.original_filename}>
                     {doc.original_filename || '—'}
                   </td>
                   <td className="px-4 py-3 text-gray-700">{doc.doc_type_display}</td>
                   <td className="px-4 py-3 text-gray-700">{doc.supplier_name || '—'}</td>
                   <td className="px-4 py-3 text-xs text-gray-500">{doc.document_number || '—'}</td>
                   <td className="px-4 py-3 text-gray-700 tabular-nums">{fmt(doc.total_amount)}</td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={doc.source} label={doc.source_display} />
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
                       <StatusBadge status={doc.status} label={doc.status_display} />
@@ -100,6 +122,14 @@ export default function Dashboard() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-xs text-gray-400">{fmtDate(doc.created_at)}</td>
+                  <td className="px-4 py-3">
+                    <Link
+                      href={`/documents/${doc.id}`}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
+                    >
+                      Dettaglio →
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>

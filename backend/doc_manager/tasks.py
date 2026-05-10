@@ -51,6 +51,21 @@ def process_document_task(
                 extra_doc.save()
                 find_and_reconcile(extra_doc)
 
+        elif document.source == Document.SourceChoices.IMAGE:
+            content_bytes = bytes(file_content)
+            with httpx.Client(timeout=120) as client:
+                response = client.post(
+                    f"{settings.AI_SERVICE_URL}/ocr/upload",
+                    files={"file": (filename, content_bytes)},
+                )
+                response.raise_for_status()
+                parsed = response.json()
+
+            _save_ocr_result(document, parsed)
+            document.status = Document.StatusChoices.PROCESSED
+            document.save()
+            find_and_reconcile(document)
+
         elif document.source == Document.SourceChoices.WHATSAPP:
             with httpx.Client(timeout=120) as client:
                 response = client.post(
@@ -60,38 +75,7 @@ def process_document_task(
                 response.raise_for_status()
                 parsed = response.json()
 
-            document.doc_type = parsed.get("doc_type", Document.TypeChoices.UNKNOWN)
-            document.supplier_name = parsed.get("supplier_name", "")
-            document.document_number = parsed.get("document_number", "")
-            document.total_amount = parsed.get("total_amount")
-            document.extracted_data = {"raw_text": parsed.get("raw_text", "")}
-
-            date_str = parsed.get("document_date", "")
-            if date_str:
-                try:
-                    from datetime import date
-                    document.document_date = date.fromisoformat(date_str)
-                except ValueError:
-                    pass
-
-            rows_data = parsed.get("rows", [])
-            DocumentRow.objects.filter(document=document).delete()
-            DocumentRow.objects.bulk_create([
-                DocumentRow(
-                    document=document,
-                    row_index=i,
-                    item_code=row.get("item_code", ""),
-                    description=row.get("description", ""),
-                    quantity=row.get("quantity"),
-                    unit=row.get("unit", ""),
-                    unit_price=row.get("unit_price"),
-                    total_price=row.get("total_price"),
-                    discount=row.get("discount"),
-                    raw_data=row,
-                )
-                for i, row in enumerate(rows_data)
-            ])
-
+            _save_ocr_result(document, parsed)
             document.status = Document.StatusChoices.PROCESSED
             document.save()
             find_and_reconcile(document)
@@ -106,6 +90,42 @@ def process_document_task(
         except Exception:
             pass
         raise self.retry(exc=exc, countdown=60)
+
+
+def _save_ocr_result(document, parsed: dict):
+    """Salva il risultato OCR (da /ocr/image o /ocr/upload) su un Document."""
+    from .models import Document, DocumentRow
+
+    document.doc_type = parsed.get("doc_type", Document.TypeChoices.UNKNOWN)
+    document.supplier_name = parsed.get("supplier_name", "")
+    document.document_number = parsed.get("document_number", "")
+    document.total_amount = parsed.get("total_amount")
+    document.extracted_data = {"raw_text": parsed.get("raw_text", "")}
+
+    date_str = parsed.get("document_date", "")
+    if date_str:
+        try:
+            from datetime import date
+            document.document_date = date.fromisoformat(date_str)
+        except ValueError:
+            pass
+
+    DocumentRow.objects.filter(document=document).delete()
+    DocumentRow.objects.bulk_create([
+        DocumentRow(
+            document=document,
+            row_index=i,
+            item_code=row.get("item_code", ""),
+            description=row.get("description", ""),
+            quantity=row.get("quantity"),
+            unit=row.get("unit", ""),
+            unit_price=row.get("unit_price"),
+            total_price=row.get("total_price"),
+            discount=row.get("discount"),
+            raw_data=row,
+        )
+        for i, row in enumerate(parsed.get("rows", []))
+    ])
 
 
 def _update_document(document, parsed: dict):

@@ -69,6 +69,34 @@ class DocumentUploadView(APIView):
         )
 
 
+class ImageUploadView(APIView):
+    """
+    Riceve un file immagine (jpg/png) dall'operatore — simula il flusso WhatsApp
+    senza bisogno di un URL pubblico. Utile per testare l'OCR localmente.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        file = request.FILES.get("file")
+        if not file:
+            return Response({"error": "file è obbligatorio"}, status=status.HTTP_400_BAD_REQUEST)
+
+        document = Document.objects.create(
+            source=Document.SourceChoices.IMAGE,
+            status=Document.StatusChoices.PENDING,
+            original_filename=file.name,
+        )
+
+        file_content = file.read()
+        process_document_task.delay(
+            document_id=document.id,
+            file_content=list(file_content),
+            filename=file.name,
+        )
+
+        return Response(DocumentSerializer(document).data, status=status.HTTP_202_ACCEPTED)
+
+
 class WhatsAppWebhookView(APIView):
     """
     Riceve il webhook WhatsApp (o il mock endpoint).

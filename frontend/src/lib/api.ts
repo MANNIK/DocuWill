@@ -77,6 +77,14 @@ export async function uploadDocument(file: File): Promise<Document> {
   return res.json()
 }
 
+export async function uploadImage(file: File): Promise<Document> {
+  const body = new FormData()
+  body.append('file', file)
+  const res = await fetch(`${API}/api/documents/upload-image/`, { method: 'POST', body })
+  if (!res.ok) throw new Error('Upload immagine fallito')
+  return res.json()
+}
+
 export async function getReconciliations(): Promise<Reconciliation[]> {
   const res = await fetch(`${API}/api/reconciliations/`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Errore caricamento riconciliazioni')

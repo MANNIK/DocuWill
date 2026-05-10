@@ -18,6 +18,7 @@ class Document(models.Model):
     class SourceChoices(models.TextChoices):
         UPLOAD = "upload", "Upload CSV/Excel"
         WHATSAPP = "whatsapp", "WhatsApp"
+        IMAGE = "image", "Immagine caricata"
 
     class StatusChoices(models.TextChoices):
         PENDING = "pending", "In elaborazione"
