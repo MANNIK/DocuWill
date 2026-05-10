@@ -90,19 +90,38 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
         raise HTTPException(status_code=500, detail=f"Errore lettura file: {e}")
 
 
-def rows_to_text(sheets: list[list[list[Any]]], max_rows_per_sheet: int = 50) -> str:
+def rows_to_text(sheets: list[list[list[Any]]], max_rows_per_sheet: int = 50, tail_rows: int = 15) -> str:
     lines = []
     global_index = 0
     for sheet_idx, sheet_rows in enumerate(sheets):
         if len(sheets) > 1:
             lines.append(f"--- SHEET {sheet_idx + 1} ---")
-        for row in sheet_rows[:max_rows_per_sheet]:
+
+        total = len(sheet_rows)
+        cutoff = min(max_rows_per_sheet, total)
+        tail_start = max(cutoff, total - tail_rows)
+
+        for row in sheet_rows[:cutoff]:
             cells = [str(cell).strip() for cell in row]
             if not any(cells):
                 global_index += 1
                 continue
             lines.append(f"Riga {global_index}: {' | '.join(cells)}")
             global_index += 1
+
+        skipped = tail_start - cutoff
+        if skipped > 0:
+            lines.append(f"... [{skipped} righe omesse] ...")
+            global_index += skipped
+
+        for row in sheet_rows[tail_start:]:
+            cells = [str(cell).strip() for cell in row]
+            if not any(cells):
+                global_index += 1
+                continue
+            lines.append(f"Riga {global_index}: {' | '.join(cells)}")
+            global_index += 1
+
     return "\n".join(lines)
 
 
@@ -161,6 +180,9 @@ Regole sulle sezioni:
 - Se il file ha una sola tabella, restituisci sections con un solo elemento
 - Non sovrapporre data_row_indices tra sezioni diverse
 - Se vedi marcatori "--- SHEET N ---", ogni sheet è un foglio Excel separato
+- Se vedi "... [N righe omesse] ...", il file contiene più righe di quelle mostrate;
+  le ultime righe visibili dopo il marcatore sono la coda reale del file — usale per
+  riconoscere righe di riepilogo/totale da escludere da data_row_indices
 - Per documenti con colonne "Qty per Box"/"Quantità per Collo" E "Total Qty"/
   "Quantità Totale", mappa SEMPRE "quantity" sulla colonna del totale,
   non sulla quantità unitaria per collo
@@ -357,7 +379,7 @@ async def parse_csv_excel(file: UploadFile = File(...)):
         total = metadata.get("total_amount")
         if total is None:
             calculated = sum(r.total_price for r in rows if r.total_price is not None)
-            total = calculated if calculated else None
+            total = round(calculated, 2) if calculated else None
 
         documents.append(ParsedDocument(
             doc_type=section.get("doc_type", "unknown"),

@@ -13,6 +13,7 @@ class Document(models.Model):
         PACKING_LIST = "packing_list", "Packing List"
         SHIPMENT = "shipment", "Spedizione"
         CONFIRMATION = "confirmation", "Conferma"
+        SUMMARY = "summary", "Riepilogo"
 
     class SourceChoices(models.TextChoices):
         UPLOAD = "upload", "Upload CSV/Excel"
