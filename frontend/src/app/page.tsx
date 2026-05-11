@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { getDocuments, getDocument } from '@/lib/api'
+import { getDocuments, getDocument, resetDatabase } from '@/lib/api'
 import type { Document } from '@/lib/api'
 import StatusBadge from '@/components/StatusBadge'
 import UploadZone from '@/components/UploadZone'
@@ -52,11 +52,26 @@ export default function Dashboard() {
     reload()
   }
 
+  async function handleReset() {
+    if (!confirm('Eliminare tutti i documenti e le riconciliazioni?')) return
+    await resetDatabase()
+    setPollingIds(new Set())
+    reload()
+  }
+
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Documenti</h1>
-        <p className="text-sm text-gray-500 mt-1">Carica documenti per avviare la riconciliazione automatica.</p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Documenti</h1>
+          <p className="text-sm text-gray-500 mt-1">Carica documenti per avviare la riconciliazione automatica.</p>
+        </div>
+        <button
+          onClick={handleReset}
+          className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-md hover:bg-red-50 transition-colors"
+        >
+          Pulisci tutto
+        </button>
       </div>
 
       {/* Zone di upload affiancate */}

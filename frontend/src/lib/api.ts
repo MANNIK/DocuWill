@@ -13,6 +13,16 @@ export interface DocumentRow {
   raw_data: Record<string, string>
 }
 
+export interface ExtractedData {
+  filename?: string
+  section_name?: string
+  total_rows?: number
+  doc_type_confidence?: number
+  structure_notes?: string
+  file_summary?: Record<string, number>
+  [key: string]: unknown
+}
+
 export interface Document {
   id: number
   source: string
@@ -27,6 +37,7 @@ export interface Document {
   document_number: string
   total_amount: string | null
   error_message: string
+  extracted_data: ExtractedData
   rows: DocumentRow[]
   created_at: string
   updated_at: string
@@ -82,6 +93,12 @@ export async function uploadImage(file: File): Promise<Document> {
   body.append('file', file)
   const res = await fetch(`${API}/api/documents/upload-image/`, { method: 'POST', body })
   if (!res.ok) throw new Error('Upload immagine fallito')
+  return res.json()
+}
+
+export async function resetDatabase(): Promise<{ deleted: number }> {
+  const res = await fetch(`${API}/api/dev/reset/`, { method: 'POST' })
+  if (!res.ok) throw new Error('Reset fallito')
   return res.json()
 }
 

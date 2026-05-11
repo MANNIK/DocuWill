@@ -137,6 +137,19 @@ class WhatsAppWebhookView(APIView):
         )
 
 
+class ResetDatabaseView(APIView):
+    """Elimina tutti i documenti, riconciliazioni e discrepanze. Solo per sviluppo."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .models import Discrepancy, Reconciliation, Document
+        Discrepancy.objects.all().delete()
+        Reconciliation.objects.all().delete()
+        count = Document.objects.count()
+        Document.objects.all().delete()
+        return Response({"deleted": count})
+
+
 class ReconciliationListView(generics.ListAPIView):
     """Lista di tutte le riconciliazioni."""
     queryset = Reconciliation.objects.select_related(

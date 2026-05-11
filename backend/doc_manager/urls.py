@@ -11,6 +11,9 @@ urlpatterns = [
     # Webhook WhatsApp
     path("webhook/whatsapp/", views.WhatsAppWebhookView.as_view(), name="whatsapp-webhook"),
 
+    # Dev utility
+    path("dev/reset/", views.ResetDatabaseView.as_view(), name="dev-reset"),
+
     # Riconciliazioni
     path("reconciliations/", views.ReconciliationListView.as_view(), name="reconciliation-list"),
     path("reconciliations/<int:pk>/", views.ReconciliationDetailView.as_view(), name="reconciliation-detail"),

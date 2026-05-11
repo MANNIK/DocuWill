@@ -125,10 +125,10 @@ def rows_to_text(sheets: list[list[list[Any]]], max_rows_per_sheet: int = 50, ta
     return "\n".join(lines)
 
 
-def ask_claude_to_understand_structure(preview_text: str, filename: str) -> list[dict]:
+def ask_claude_to_understand_structure(preview_text: str, filename: str) -> dict:
     """
     Chiede a GPT di identificare tutte le sezioni del file.
-    Restituisce una lista di strutture — una per sezione.
+    Restituisce {"sections": [...], "file_summary": {...}}.
     """
     prompt = f"""Sei un esperto di documenti aziendali. Analizza questo file
 chiamato "{filename}" e identifica TUTTE le sezioni di dati presenti.
@@ -158,7 +158,10 @@ Rispondi SOLO con JSON valido:
       "doc_type_confidence": <0-100>,
       "notes": ""
     }}
-  ]
+  ],
+  "file_summary": {{
+    "<nome campo>": <valore numerico>
+  }}
 }}
 
 Regole sul column_mapping:
@@ -166,16 +169,29 @@ Regole sul column_mapping:
   a meno che la colonna sia davvero irrilevante (es. colonne vuote, numeri riga)
 - Per documenti di spedizione: numero spedizione → item_code, mittente/destinatario
   → description, peso/importo → quantity o total_price
-- Per tariffari: fascia di peso/distanza → description, tariffa base → unit_price,
-  supplemento/percentuale → discount
-- Per colonne "Qty per Box" e "Total Qty", mappa sempre "quantity" sulla
-  colonna del totale (Total Qty), non sulla quantità per collo
+- usa item_code SOLO per identificatori genuini: codici prodotto (es. FRN-001),
+  SKU, codici paese (DE/FR), nomi di servizio (es. "Consegna al piano"). NON usare
+  item_code per valori numerici come fasce di peso, distanze o indici di riga
+- Per documenti non-standard (tariffari, zone, supplementi, tabelle lookup):
+  mappa su unit_price il valore numerico principale se identificabile, usa "ignore"
+  per i restanti. I nomi originali delle colonne vengono preservati automaticamente
+- Priorità colonne quantità (in ordine): "Total Qty" > "Qty per Box" > altre quantità.
+  Mappa SEMPRE "quantity" su "Total Qty" se presente. "Qty per Box" e "Boxes" → "ignore".
+  "Weight Kg", "Peso Kg", "Gross Weight", "Net Weight" sono PESI, non quantità → sempre "ignore"
 - Se una colonna ha nomi come "Prezzo Scontato" o "Importo Netto" mappala
   su total_price, non su discount
 
 Regole sulle sezioni:
 - Crea una sezione separata per ogni fornitore diverso, ogni tipo di documento
   diverso, ogni tabella logicamente indipendente
+- NON creare sezioni per dati aggregati o riepilogativi (es. "RIEPILOGO SPEDIZIONE",
+  "Totale Colli", "Subtotale", "Grand Total", "Summary"). Questi non sono documenti
+  commerciali autonomi — una sezione valida deve contenere righe di prodotti o
+  servizi con codici articolo o descrizioni di dettaglio
+- Se trovi dati aggregati logistici (totale colli, peso totale, volume, n. pallet),
+  mettili in "file_summary" come {{"{{"nome_campo": valore}}}} invece di creare
+  una sezione separata. Esempio: {{"Totale Colli": 98, "Peso Kg": 3244, "Volume M3": 7.44}}
+- Colonne come "Peso Kg", "Volume M3", "N. Colli" sono dati logistici, NON prezzi
 - Escludi da data_row_indices: titoli, header, righe vuote, totali/riepiloghi
 - Se il file ha una sola tabella, restituisci sections con un solo elemento
 - Non sovrapporre data_row_indices tra sezioni diverse
@@ -205,7 +221,10 @@ Regole sulle sezioni:
 
     try:
         result = json.loads(raw)
-        return result.get("sections", [])
+        return {
+            "sections": result.get("sections", []),
+            "file_summary": result.get("file_summary", {}),
+        }
     except json.JSONDecodeError as e:
         raise HTTPException(
             status_code=500,
@@ -242,6 +261,7 @@ def extract_rows(
     data_start: int,
     column_mapping: dict[str, str],
     data_row_indices: list[int] | None = None,
+    header_cells: list[str] | None = None,
 ) -> list[ParsedRow]:
     parsed_rows = []
     row_counter = 0
@@ -275,9 +295,21 @@ def extract_rows(
             except IndexError:
                 continue
 
-            raw_data[f"col_{col_idx}"] = cell_value
+            if not cell_value:
+                continue
 
-            if field_name == "ignore" or not cell_value:
+            # raw_data contiene SEMPRE tutte le colonne con il nome originale dell'header,
+            # incluse quelle mappate a campi standard. È la fonte di verità completa:
+            # immune a scelte di mapping di GPT, usata da L2 full-semantic per confrontare
+            # per nome colonna originale anziché per tipo campo generico.
+            col_name = (
+                header_cells[int(col_idx)]
+                if header_cells and int(col_idx) < len(header_cells) and header_cells[int(col_idx)]
+                else f"col_{col_idx}"
+            )
+            raw_data[col_name] = cell_value
+
+            if field_name == "ignore":
                 continue
 
             if field_name in ("quantity", "unit_price", "total_price", "discount"):
@@ -290,6 +322,7 @@ def extract_rows(
             fields["description"],
             fields["quantity"] is not None,
             fields["unit_price"] is not None,
+            bool(raw_data),  # righe con soli campi "ignore" ma dati non vuoti (es. "A PREVENTIVO")
         ])
         if not has_data:
             continue
@@ -325,7 +358,9 @@ async def parse_csv_excel(file: UploadFile = File(...)):
     # GPT vede solo le prime 50 righe per capire la struttura
     # ma extract_rows usa TUTTE le righe
     preview = rows_to_text(sheets, max_rows_per_sheet=50)
-    sections = ask_claude_to_understand_structure(preview, filename)
+    gpt_result = ask_claude_to_understand_structure(preview, filename)
+    sections = gpt_result["sections"]
+    file_summary = gpt_result.get("file_summary", {})
 
     if not sections:
         raise HTTPException(status_code=422, detail="Nessuna sezione dati trovata.")
@@ -337,43 +372,44 @@ async def parse_csv_excel(file: UploadFile = File(...)):
             for k, v in section.get("column_mapping", {}).items()
         }
 
-        # Se GPT ha fornito data_row_indices espliciti (campione),
-        # li usiamo solo per capire quali righe sono dati —
-        # poi estendiamo automaticamente fino alla fine del file
         data_row_indices = section.get("data_row_indices")
         data_start = section.get("data_start_row_index", 0)
 
-        if data_row_indices:
-            # Calcola il pattern: da dove iniziano i dati veri
-            # e quante righe di "header interno" ci sono tra sezioni
+        # Auto-estensione solo per file grandi a sezione singola:
+        # GPT vede max 50 righe, ma il file ne può avere centinaia.
+        # In quel caso prendiamo il primo indice dati e estendiamo
+        # fino alla fine del file (GPT non poteva vedere quelle righe).
+        # Per file multi-sezione o file piccoli (tutto visibile a GPT)
+        # gli indici restituiti da GPT sono già precisi — non toccarli.
+        if data_row_indices and len(sections) == 1 and len(all_rows) > 50:
             first_data_row = min(data_row_indices)
-            
-            # Estendi fino alla fine del file mantenendo lo stesso pattern
-            # Salta le righe che GPT ha escluso all'inizio (header, metadati)
-            all_data_indices = list(range(first_data_row, len(all_rows)))
-            
-            # Filtra le righe che sembrano header o vuote
             extended_indices = []
-            for i in all_data_indices:
-                if i >= len(all_rows):
-                    break
+            for i in range(first_data_row, len(all_rows)):
                 row = all_rows[i]
                 cells = [str(c).strip() for c in row]
-                # Salta righe vuote
                 if not any(cells):
                     continue
-                # Salta righe che sembrano header
-                # (stesse celle dell'header originale)
                 extended_indices.append(i)
-            
             data_row_indices = extended_indices
+
+        # Estrai la riga header per usare i nomi reali delle colonne in raw_data
+        header_row_idx = section.get("header_row_index")
+        header_cells = None
+        if header_row_idx is not None and int(header_row_idx) < len(all_rows):
+            header_cells = [str(c).strip() for c in all_rows[int(header_row_idx)]]
 
         rows = extract_rows(
             all_rows,
             data_start=data_start,
             column_mapping=column_mapping,
             data_row_indices=data_row_indices,
+            header_cells=header_cells,
         )
+
+        # Scarta sezioni aggregate (nessun item_code, meno di 2 righe):
+        # sono footer/riepilogo, non documenti commerciali autonomi
+        if len(rows) < 2 and not any(r.item_code for r in rows):
+            continue
 
         metadata = section.get("metadata", {})
         total = metadata.get("total_amount")
@@ -395,6 +431,7 @@ async def parse_csv_excel(file: UploadFile = File(...)):
                 "doc_type_confidence": section.get("doc_type_confidence", 0),
                 "structure_notes": section.get("notes", ""),
                 "claude_structure": section,
+                **({"file_summary": file_summary} if file_summary else {}),
             },
         ))
 
