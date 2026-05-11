@@ -169,9 +169,11 @@ Regole sul column_mapping:
   a meno che la colonna sia davvero irrilevante (es. colonne vuote, numeri riga)
 - Per documenti di spedizione: numero spedizione → item_code, mittente/destinatario
   → description, peso/importo → quantity o total_price
-- usa item_code SOLO per identificatori genuini: codici prodotto (es. FRN-001),
-  SKU, codici paese (DE/FR), nomi di servizio (es. "Consegna al piano"). NON usare
-  item_code per valori numerici come fasce di peso, distanze o indici di riga
+- usa item_code per il codice articolo/prodotto (SKU, Item Code, Codice Articolo,
+  Codice Prodotto). Se esistono sia una colonna "Item Code"/"SKU" che "Order Ref"/
+  "Order Number"/"Riferimento Ordine", mappa SOLO la prima su item_code e ignora
+  la seconda — i riferimenti ordine non sono codici articolo
+- NON usare item_code per valori numerici come fasce di peso, distanze o indici di riga
 - Per documenti non-standard (tariffari, zone, supplementi, tabelle lookup):
   mappa su unit_price il valore numerico principale se identificabile, usa "ignore"
   per i restanti. I nomi originali delle colonne vengono preservati automaticamente

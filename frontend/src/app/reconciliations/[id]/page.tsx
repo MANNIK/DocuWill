@@ -12,7 +12,7 @@ function fmt(amount: string | null) {
 
 function DocCard({ doc, label }: { doc: Document; label: string }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-lg p-4">
+    <div className="bg-white shadow-sm rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">{label}</span>
         <StatusBadge status={doc.status} label={doc.status_display} />
@@ -101,7 +101,7 @@ export default function ReconciliationDetail({ params }: { params: Promise<{ id:
       </div>
 
       {/* Discrepanze */}
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className="bg-white shadow-sm rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
           <h2 className="font-medium text-gray-900">Discrepanze</h2>
           {errors.length > 0 && (
@@ -150,7 +150,7 @@ export default function ReconciliationDetail({ params }: { params: Promise<{ id:
       </div>
 
       {/* Pannello revisione */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <div className="bg-white shadow-sm rounded-lg p-4">
         <h2 className="font-medium text-gray-900 mb-3">Revisione operatore</h2>
         <textarea
           value={notes}

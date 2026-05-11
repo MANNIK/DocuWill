@@ -144,7 +144,7 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* Metadati */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4">
+      <div className="bg-white shadow-sm rounded-lg p-4">
         <h2 className="text-sm font-medium text-gray-900 mb-3">Metadati estratti</h2>
         <div className="space-y-1.5">
           <MetaRow label="Fornitore" value={doc.supplier_name} />
@@ -160,7 +160,7 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* Righe estratte */}
-      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <div className="bg-white shadow-sm rounded-lg overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
           <h2 className="font-medium text-gray-900">Righe estratte</h2>
           <span className="text-xs text-gray-400">{doc.rows.length} righe</span>
@@ -182,7 +182,7 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* Dati avanzati */}
-      <details className="group bg-white border border-gray-200 rounded-lg overflow-hidden">
+      <details className="group bg-white shadow-sm rounded-lg overflow-hidden">
         <summary className="px-4 py-3 cursor-pointer flex items-center justify-between text-sm font-medium text-gray-700 hover:bg-gray-50 select-none">
           <span>Dati avanzati</span>
           <span className="text-gray-400 group-open:rotate-180 transition-transform">▾</span>

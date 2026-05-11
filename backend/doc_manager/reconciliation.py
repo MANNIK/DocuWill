@@ -1,10 +1,54 @@
 import json
 import os
 import re
+from difflib import SequenceMatcher
 from openai import OpenAI
 from .models import Document, Reconciliation, Discrepancy
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# ─────────────────────────────────────────────
+# Embedding helpers
+# ─────────────────────────────────────────────
+
+_embed_cache: dict[str, list[float]] = {}
+
+
+def _embed(text: str) -> list[float]:
+    """
+    Embedding con cache in memoria per evitare chiamate duplicate.
+    Usa text-embedding-3-small: veloce, economico, 1536 dimensioni.
+    """
+    key = text.strip().lower()
+    if not key:
+        return []
+    if key not in _embed_cache:
+        response = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=key,
+        )
+        _embed_cache[key] = response.data[0].embedding
+    return _embed_cache[key]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    """Cosine similarity tra due vettori embedding."""
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    mag = (sum(x * x for x in a) ** 0.5) * (sum(x * x for x in b) ** 0.5)
+    return dot / mag if mag else 0.0
+
+
+def _supplier_similarity(name_a: str, name_b: str) -> float:
+    """
+    Similarity semantica tra due nomi fornitore.
+    Più robusta dell'exact match: coglie varianti come
+    'TransLog Express S.p.A.' vs 'Trans-Log Express'.
+    """
+    if not name_a or not name_b:
+        return 0.0
+    return _cosine(_embed(name_a), _embed(name_b))
 
 
 def _normalize_value(val: str) -> float | str:
@@ -16,72 +60,152 @@ def _normalize_value(val: str) -> float | str:
         return val
 
 # ─────────────────────────────────────────────
-# LIVELLO 1 — Match matematico esatto
+# LIVELLO 1 — Match matematico con fuzzy fallback
 # ─────────────────────────────────────────────
+
+_FUZZY_THRESHOLD = 0.9
+
+
+def _fuzzy_find(key: str, candidates: set[str]) -> tuple[str | None, float]:
+    """
+    Cerca il candidato più simile a key tra candidates.
+    Threshold 0.9: cattura differenze di formato (FRN-001 vs FRN001, score 0.92)
+    ma non codici simili con cifre diverse (FRN-001 vs FRN-002, score 0.857).
+    Restituisce (best_match, score) oppure (None, 0).
+    """
+    best, best_score = None, 0.0
+    key_lower = key.lower()
+    for c in candidates:
+        score = SequenceMatcher(None, key_lower, c.lower()).ratio()
+        if score > best_score and score >= _FUZZY_THRESHOLD:
+            best, best_score = c, score
+    return best, best_score
+
+
+def _compare_rows(row1, row2) -> list[dict]:
+    """Confronto campi numerici tra due righe già abbinate."""
+    discrepancies = []
+
+    if row1.quantity is not None and row2.quantity is not None:
+        if abs(float(row1.quantity) - float(row2.quantity)) > 0.001:
+            discrepancies.append({
+                "type": "quantity_mismatch",
+                "field": "quantity",
+                "value_doc1": str(row1.quantity),
+                "value_doc2": str(row2.quantity),
+                "severity": "error",
+            })
+
+    if row1.unit_price is not None and row2.unit_price is not None:
+        if abs(float(row1.unit_price) - float(row2.unit_price)) > 0.001:
+            discrepancies.append({
+                "type": "price_mismatch",
+                "field": "unit_price",
+                "value_doc1": str(row1.unit_price),
+                "value_doc2": str(row2.unit_price),
+                "severity": "error",
+            })
+
+    if row1.unit and row2.unit:
+        if row1.unit.lower().strip() != row2.unit.lower().strip():
+            discrepancies.append({
+                "type": "unit_mismatch",
+                "field": "unit",
+                "value_doc1": row1.unit,
+                "value_doc2": row2.unit,
+                "severity": "warning",
+            })
+
+    if row1.discount is not None and row2.discount is not None:
+        if abs(float(row1.discount) - float(row2.discount)) > 0.001:
+            discrepancies.append({
+                "type": "discount_mismatch",
+                "field": "discount",
+                "value_doc1": str(row1.discount),
+                "value_doc2": str(row2.discount),
+                "severity": "warning",
+            })
+
+    return discrepancies
+
 
 def level1_exact_match(rows1: dict, rows2: dict) -> tuple[bool, list[dict]]:
     """
     Confronto matematico puro — nessuna chiamata esterna.
-    Restituisce (tutto_ok, discrepanze_trovate).
+
+    Strategia di matching per ogni riga di rows1:
+    1. Exact match su item_code → confronto diretto
+    2. Fuzzy match (similarità ≥ 0.9) → confronto + warning code_mismatch
+    3. Nessun match → missing_in_doc2 error
+
+    Il set matched_in_rows2 traccia le chiavi già abbinate (esatte o fuzzy)
+    per evitare che la stessa riga venga contata anche come extra_in_doc2.
     """
     discrepancies = []
+    matched_in_rows2: set[str] = set()
 
     for key, row1 in rows1.items():
-        if key not in rows2:
-            discrepancies.append({
-                "type": "missing_in_doc2",
-                "field": "row",
-                "value_doc1": row1.description or row1.item_code,
-                "value_doc2": "",
-                "severity": "error",
-            })
-            continue
+        if key in rows2:
+            # Exact match
+            matched_in_rows2.add(key)
+            discrepancies.extend(_compare_rows(row1, rows2[key]))
+        else:
+            # Fuzzy fallback
+            available = set(rows2.keys()) - matched_in_rows2
+            fuzzy_key, score = _fuzzy_find(key, available)
 
-        row2 = rows2[key]
-
-        if row1.quantity is not None and row2.quantity is not None:
-            if abs(float(row1.quantity) - float(row2.quantity)) > 0.001:
+            if fuzzy_key:
+                matched_in_rows2.add(fuzzy_key)
                 discrepancies.append({
-                    "type": "quantity_mismatch",
-                    "field": "quantity",
-                    "value_doc1": str(row1.quantity),
-                    "value_doc2": str(row2.quantity),
-                    "severity": "error",
-                })
-
-        if row1.unit_price is not None and row2.unit_price is not None:
-            if abs(float(row1.unit_price) - float(row2.unit_price)) > 0.001:
-                discrepancies.append({
-                    "type": "price_mismatch",
-                    "field": "unit_price",
-                    "value_doc1": str(row1.unit_price),
-                    "value_doc2": str(row2.unit_price),
-                    "severity": "error",
-                })
-
-        if row1.unit and row2.unit:
-            if row1.unit.lower().strip() != row2.unit.lower().strip():
-                discrepancies.append({
-                    "type": "unit_mismatch",
-                    "field": "unit",
-                    "value_doc1": row1.unit,
-                    "value_doc2": row2.unit,
+                    "type": "code_mismatch",
+                    "field": "item_code",
+                    "value_doc1": key,
+                    "value_doc2": fuzzy_key,
                     "severity": "warning",
+                    "note": f"Codici simili ({score:.0%}) — stesso articolo con codifica diversa",
                 })
+                discrepancies.extend(_compare_rows(row1, rows2[fuzzy_key]))
+            else:
+                # Secondo fallback: embedding sulla descrizione.
+                # Cattura casi come "Apple Juice 1L" vs "Succo di Mela 1 litro"
+                # dove il fuzzy su item_code fallisce ma le descrizioni sono semanticamente vicine.
+                emb_match = None
+                emb_score = 0.0
+                if row1.description:
+                    for cand_key in available:
+                        cand_row = rows2[cand_key]
+                        if cand_row.description:
+                            sim = _cosine(
+                                _embed(row1.description),
+                                _embed(cand_row.description),
+                            )
+                            if sim > emb_score and sim >= 0.88:
+                                emb_score = sim
+                                emb_match = cand_key
 
-        if row1.discount is not None and row2.discount is not None:
-            if abs(float(row1.discount) - float(row2.discount)) > 0.001:
-                discrepancies.append({
-                    "type": "discount_mismatch",
-                    "field": "discount",
-                    "value_doc1": str(row1.discount),
-                    "value_doc2": str(row2.discount),
-                    "severity": "warning",
-                })
+                if emb_match:
+                    matched_in_rows2.add(emb_match)
+                    discrepancies.append({
+                        "type": "code_mismatch",
+                        "field": "item_code",
+                        "value_doc1": key,
+                        "value_doc2": emb_match,
+                        "severity": "warning",
+                        "note": f"Descrizioni semanticamente simili ({emb_score:.0%}) — codici diversi ma stesso articolo",
+                    })
+                    discrepancies.extend(_compare_rows(row1, rows2[emb_match]))
+                else:
+                    discrepancies.append({
+                        "type": "missing_in_doc2",
+                        "field": "row",
+                        "value_doc1": row1.description or row1.item_code,
+                        "value_doc2": "",
+                        "severity": "error",
+                    })
 
-    # Righe extra in doc2
+    # Righe in doc2 non abbinate (né exact né fuzzy)
     for key, row2 in rows2.items():
-        if key not in rows1:
+        if key not in rows1 and key not in matched_in_rows2:
             discrepancies.append({
                 "type": "extra_in_doc2",
                 "field": "row",
@@ -90,7 +214,6 @@ def level1_exact_match(rows1: dict, rows2: dict) -> tuple[bool, list[dict]]:
                 "severity": "warning",
             })
 
-    # Totali
     return len(discrepancies) == 0, discrepancies
 
 
@@ -471,40 +594,62 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
     ):
         score += 50
 
-    # Stesso fornitore
-    if (
-        doc_a.supplier_name
-        and doc_b.supplier_name
-        and doc_a.supplier_name.lower().strip() == doc_b.supplier_name.lower().strip()
-    ):
-        score += 30
+    # Fornitore — embedding similarity invece di exact match.
+    # Coglie varianti come "TransLog S.p.A." vs "TransLog Express".
+    if doc_a.supplier_name and doc_b.supplier_name:
+        sup_sim = _supplier_similarity(doc_a.supplier_name, doc_b.supplier_name)
+        if sup_sim >= 0.92:
+            score += 30   # stesso fornitore
+        elif sup_sim >= 0.78:
+            score += 15   # probabilmente stesso fornitore, nome leggermente diverso
 
     # Stessa data
     if doc_a.document_date and doc_b.document_date:
         if doc_a.document_date == doc_b.document_date:
             score += 10
 
-    # Totali simili
+    # Totali simili — cast a float per evitare Decimal vs float TypeError
     if doc_a.total_amount and doc_b.total_amount:
-        diff = abs(doc_a.total_amount - doc_b.total_amount)
-        max_val = max(doc_a.total_amount, doc_b.total_amount)
+        ta = float(doc_a.total_amount)
+        tb = float(doc_b.total_amount)
+        diff = abs(ta - tb)
+        max_val = max(ta, tb)
         if diff < 0.01:
             score += 10
-        elif diff / max_val < 0.1:
+        elif max_val and diff / max_val < 0.1:
             score += 5
 
-    # Articoli in comune — Jaccard su item_code
+    # Articoli in comune — prima Jaccard esatto, poi fuzzy come fallback
     codes_a = {r.item_code.strip() for r in doc_a.rows.all() if r.item_code and r.item_code.strip()}
     codes_b = {r.item_code.strip() for r in doc_b.rows.all() if r.item_code and r.item_code.strip()}
 
     if codes_a and codes_b:
-        overlap = len(codes_a & codes_b) / len(codes_a | codes_b)
-        if overlap >= 0.8:
+        # Jaccard combinato: ogni codice di A viene abbinato a B via exact match
+        # o fuzzy match. Più accurato del solo Jaccard esatto quando i codici
+        # hanno formattazione diversa (FRN-001 vs FRN001).
+        matched_b: set[str] = set()
+        hits = 0
+        for ca in codes_a:
+            if ca in codes_b and ca not in matched_b:
+                hits += 1
+                matched_b.add(ca)
+            else:
+                fb, _ = _fuzzy_find(ca, codes_b - matched_b)
+                if fb:
+                    hits += 1
+                    matched_b.add(fb)
+
+        unmatched_b = codes_b - matched_b
+        total_unique = len(codes_a) + len(unmatched_b)
+        combined_jaccard = hits / total_unique if total_unique else 0
+
+        if combined_jaccard >= 0.8:
             score += 40
-        elif overlap >= 0.5:
+        elif combined_jaccard >= 0.5:
             score += 25
-        elif overlap >= 0.2:
+        elif combined_jaccard >= 0.2:
             score += 10
+
     elif not codes_a and not codes_b:
         # Doc non-standard senza item_code: confronta i valori di raw_data
         values_a = {str(v) for r in doc_a.rows.all() for v in r.raw_data.values() if v}
@@ -588,16 +733,16 @@ def are_documents_complementary(doc_a: Document, doc_b: Document) -> bool:
     Decide se due documenti ha senso riconciliarli.
     Prima applica regole fast (senza GPT), poi chiede a GPT solo per i casi ambigui.
     """
-    same_supplier = (
-        doc_a.supplier_name
-        and doc_b.supplier_name
-        and doc_a.supplier_name.lower().strip() == doc_b.supplier_name.lower().strip()
-    )
     same_type = doc_a.doc_type == doc_b.doc_type
+    both_unknown_supplier = not doc_a.supplier_name and not doc_b.supplier_name
 
-    # Fast-path: stesso fornitore + stesso tipo = confronto versioni (es. tariffario rev3 vs rev4)
-    # Nessuna chiamata GPT necessaria — è sempre valido confrontarli.
-    if same_supplier and same_type:
+    # Supplier similarity via embedding — più robusto dell'exact match.
+    same_supplier = False
+    if doc_a.supplier_name and doc_b.supplier_name:
+        same_supplier = _supplier_similarity(doc_a.supplier_name, doc_b.supplier_name) >= 0.82
+
+    # Fast-path: stesso tipo + (fornitore simile OPPURE fornitore sconosciuto)
+    if same_type and (same_supplier or both_unknown_supplier):
         return True
 
     # Fast-path: tipi complementari noti → risparmia una chiamata GPT

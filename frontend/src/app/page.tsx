@@ -101,7 +101,7 @@ export default function Dashboard() {
       ) : docs.length === 0 ? (
         <p className="text-sm text-gray-400">Nessun documento caricato.</p>
       ) : (
-        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="bg-white shadow-sm rounded-lg overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
