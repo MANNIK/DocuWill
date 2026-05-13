@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { getDocument } from '@/lib/api'
 import type { Document, DocumentRow } from '@/lib/api'
 import StatusBadge from '@/components/StatusBadge'
+import { IconChevronLeft } from '@/components/Icons'
 
 function fmt(v: string | null | undefined, prefix = '') {
   if (v === null || v === undefined || v === '') return '—'
@@ -128,14 +129,20 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
   const standard = isStandardDoc(doc.rows)
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-8 space-y-6">
+    <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
 
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <button onClick={() => router.back()} className="text-xs text-gray-400 hover:text-gray-600 mb-2 block">← Torna indietro</button>
-          <h1 className="text-xl font-semibold text-gray-900">{doc.doc_type_display}</h1>
-          <p className="text-sm text-gray-500 mt-0.5">{doc.original_filename}</p>
+          <button
+            onClick={() => router.back()}
+            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 mb-3 transition-colors"
+          >
+            <IconChevronLeft size={14} />
+            Torna indietro
+          </button>
+          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">{doc.doc_type_display}</h1>
+          <p className="text-sm text-gray-400 mt-0.5 font-mono">{doc.original_filename}</p>
         </div>
         <div className="flex items-center gap-2 mt-6">
           <StatusBadge status={doc.source} label={doc.source_display} />
@@ -144,8 +151,8 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* Metadati */}
-      <div className="bg-white shadow-sm rounded-lg p-4">
-        <h2 className="text-sm font-medium text-gray-900 mb-3">Metadati estratti</h2>
+      <div className="bg-white rounded-xl ring-1 ring-gray-100 shadow-sm p-5">
+        <h2 className="text-sm font-semibold text-gray-900 mb-3">Metadati estratti</h2>
         <div className="space-y-1.5">
           <MetaRow label="Fornitore" value={doc.supplier_name} />
           <MetaRow label="Numero documento" value={doc.document_number} />
@@ -160,7 +167,7 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
       </div>
 
       {/* Righe estratte */}
-      <div className="bg-white shadow-sm rounded-lg overflow-hidden">
+      <div className="bg-white rounded-xl ring-1 ring-gray-100 shadow-sm overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-200 flex items-center gap-2">
           <h2 className="font-medium text-gray-900">Righe estratte</h2>
           <span className="text-xs text-gray-400">{doc.rows.length} righe</span>

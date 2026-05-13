@@ -14,6 +14,7 @@ const palette: Record<string, string> = {
   upload:    'bg-gray-100 text-gray-600',
   whatsapp:  'bg-green-100 text-green-700',
   image:     'bg-purple-100 text-purple-700',
+  inventory: 'bg-teal-100 text-teal-700',
 }
 
 export default function StatusBadge({ status, label }: { status: string; label: string }) {

@@ -154,7 +154,7 @@ Rispondi SOLO con JSON valido:
         "document_date": "",
         "total_amount": null
       }},
-      "doc_type": "order|invoice|ddt|price_list|packing_list|shipment|confirmation|unknown",
+      "doc_type": "order|invoice|ddt|price_list|packing_list|shipment|confirmation|inventory|unknown",
       "doc_type_confidence": <0-100>,
       "notes": ""
     }}
@@ -169,11 +169,18 @@ Regole sul column_mapping:
   a meno che la colonna sia davvero irrilevante (es. colonne vuote, numeri riga)
 - Per documenti di spedizione: numero spedizione → item_code, mittente/destinatario
   → description, peso/importo → quantity o total_price
-- usa item_code per il codice articolo/prodotto (SKU, Item Code, Codice Articolo,
-  Codice Prodotto). Se esistono sia una colonna "Item Code"/"SKU" che "Order Ref"/
-  "Order Number"/"Riferimento Ordine", mappa SOLO la prima su item_code e ignora
-  la seconda — i riferimenti ordine non sono codici articolo
-- NON usare item_code per valori numerici come fasce di peso, distanze o indici di riga
+
+- item_code serve a IDENTIFICARE univocamente un articolo o servizio in modo che
+  due documenti diversi possano confrontare la stessa riga. Usalo solo se la colonna
+  risponde alla domanda "cosa stiamo comprando/vendendo?":
+  ✓ Valido: codici prodotto (FRN-001, SKU-123), codici paese (DE, FR),
+            nomi servizio ("Consegna al piano"), numeri spedizione
+  ✗ Non valido: misure fisiche (Peso Min Kg, Volume, Distanza),
+               valori continui usati come intervalli (0.5, 1.1, 3.1),
+               riferimenti ordine quando esiste già una colonna item_code separata,
+               indici di riga o numeri progressivi
+  Se nessuna colonna è un identificatore genuino, lascia item_code vuoto e usa
+  description per il campo più descrittivo della riga
 - Per documenti non-standard (tariffari, zone, supplementi, tabelle lookup):
   mappa su unit_price il valore numerico principale se identificabile, usa "ignore"
   per i restanti. I nomi originali delle colonne vengono preservati automaticamente

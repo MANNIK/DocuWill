@@ -1,6 +1,7 @@
 'use client'
 import { useState, useRef, DragEvent } from 'react'
 import { uploadDocument, uploadImage } from '@/lib/api'
+import { IconUploadCloud, IconCamera } from './Icons'
 
 interface Props {
   onUploaded: (docId: number) => void
@@ -40,18 +41,20 @@ export default function UploadZone({
     if (file) handleFile(file)
   }
 
+  const Icon = imageMode ? IconCamera : IconUploadCloud
+
   return (
     <div
       onDragOver={e => { e.preventDefault(); setDragging(true) }}
       onDragLeave={() => setDragging(false)}
       onDrop={onDrop}
       onClick={() => !uploading && inputRef.current?.click()}
-      className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+      className={`relative rounded-xl border-2 border-dashed p-8 text-center transition-all select-none ${
         uploading
-          ? 'border-blue-300 bg-blue-50 cursor-wait'
+          ? 'border-blue-300 bg-blue-50/50 cursor-wait'
           : dragging
-          ? 'border-blue-500 bg-blue-50 cursor-copy'
-          : 'border-gray-300 hover:border-gray-400 bg-white cursor-pointer'
+          ? 'border-blue-400 bg-blue-50/60 cursor-copy scale-[1.01]'
+          : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50/50 cursor-pointer'
       }`}
     >
       <input
@@ -67,23 +70,33 @@ export default function UploadZone({
       />
 
       {uploading ? (
-        <div className="flex flex-col items-center gap-2">
-          <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm text-blue-600">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-6 w-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <p className="text-sm font-medium text-blue-600">
             {imageMode ? 'OCR in corso…' : 'Caricamento in corso…'}
           </p>
         </div>
       ) : (
-        <>
-          <div className="text-2xl mb-2">{imageMode ? '📷' : '📄'}</div>
-          <p className="text-sm font-medium text-gray-700">
-            {imageMode ? 'Trascina la foto del documento' : 'Trascina un file tabulare'}
-          </p>
-          <p className="text-xs text-gray-400 mt-1">{hint}</p>
-        </>
+        <div className="flex flex-col items-center gap-3">
+          <div className={`p-3 rounded-xl ${dragging ? 'bg-blue-100 text-blue-500' : 'bg-gray-100 text-gray-400'} transition-colors`}>
+            <Icon size={22} />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-gray-700">
+              {imageMode ? 'Carica foto documento' : 'Carica file tabulare'}
+            </p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              Trascina qui o clicca · {hint}
+            </p>
+          </div>
+        </div>
       )}
 
-      {error && <p className="text-xs text-red-600 mt-3">{error}</p>}
+      {error && (
+        <p className="text-xs text-red-500 mt-3 flex items-center justify-center gap-1">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

@@ -5,6 +5,7 @@ import { getDocuments, getDocument, resetDatabase } from '@/lib/api'
 import type { Document } from '@/lib/api'
 import StatusBadge from '@/components/StatusBadge'
 import UploadZone from '@/components/UploadZone'
+import { IconTrash } from '@/components/Icons'
 
 function fmt(amount: string | null) {
   if (!amount) return '—'
@@ -21,11 +22,8 @@ export default function Dashboard() {
   const [pollingIds, setPollingIds] = useState<Set<number>>(new Set())
 
   const reload = useCallback(async () => {
-    try {
-      setDocs(await getDocuments())
-    } finally {
-      setLoading(false)
-    }
+    try { setDocs(await getDocuments()) }
+    finally { setLoading(false) }
   }, [])
 
   useEffect(() => { reload() }, [reload])
@@ -60,88 +58,81 @@ export default function Dashboard() {
   }
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+    <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold text-gray-900">Documenti</h1>
-          <p className="text-sm text-gray-500 mt-1">Carica documenti per avviare la riconciliazione automatica.</p>
+          <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">Documenti</h1>
+          <p className="text-sm text-gray-500 mt-1">Carica documenti per avviare la riconciliazione automatica</p>
         </div>
         <button
           onClick={handleReset}
-          className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-md hover:bg-red-50 transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-500 hover:text-red-600 border border-gray-200 hover:border-red-200 rounded-lg transition-colors"
         >
+          <IconTrash size={13} />
           Pulisci tutto
         </button>
       </div>
 
-      {/* Zone di upload affiancate */}
-      <div className="grid grid-cols-2 gap-4 mb-8">
-        <div>
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Doc 1 — File tabulare</p>
-          <UploadZone
-            accept=".csv,.xlsx,.xls"
-            hint="CSV o Excel — .csv, .xlsx, .xls"
-            onUploaded={handleUploaded}
-          />
+      {/* Upload zones */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Doc 1 — File tabulare</p>
+          <UploadZone accept=".csv,.xlsx,.xls" hint=".csv, .xlsx, .xls" onUploaded={handleUploaded} />
         </div>
-        <div>
-          <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Doc 2 — Foto documento (simulazione WhatsApp)</p>
-          <UploadZone
-            accept=".jpg,.jpeg,.png,.webp"
-            hint="Foto del documento cartaceo — .jpg, .png, .webp"
-            onUploaded={handleUploaded}
-            imageMode
-          />
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Doc 2 — Foto documento</p>
+          <UploadZone accept=".jpg,.jpeg,.png,.webp" hint=".jpg, .png, .webp" onUploaded={handleUploaded} imageMode />
         </div>
       </div>
 
-      {/* Tabella documenti */}
+      {/* Documents table */}
       {loading ? (
-        <p className="text-sm text-gray-400">Caricamento...</p>
+        <div className="flex items-center justify-center py-16">
+          <div className="h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        </div>
       ) : docs.length === 0 ? (
-        <p className="text-sm text-gray-400">Nessun documento caricato.</p>
+        <div className="text-center py-16 text-sm text-gray-400">
+          Nessun documento caricato
+        </div>
       ) : (
-        <div className="bg-white shadow-sm rounded-lg overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden ring-1 ring-gray-100">
           <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-200">
-              <tr>
-                {['File', 'Tipo', 'Fornitore', 'Numero doc', 'Totale', 'Fonte', 'Status', 'Caricato', ''].map(h => (
-                  <th key={h} className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">{h}</th>
+            <thead>
+              <tr className="border-b border-gray-100 bg-gray-50/60">
+                {['File', 'Tipo', 'Fornitore', 'N. Doc', 'Totale', 'Fonte', 'Status', 'Caricato', ''].map(h => (
+                  <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-400 uppercase tracking-wider">{h}</th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-50">
               {docs.map(doc => (
-                <tr key={doc.id} className="hover:bg-gray-50/50">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-600 max-w-36 truncate" title={doc.original_filename}>
+                <tr key={doc.id} className="hover:bg-gray-50/50 transition-colors">
+                  <td className="px-4 py-3.5 font-mono text-xs text-gray-500 max-w-36 truncate" title={doc.original_filename}>
                     {doc.original_filename || '—'}
                   </td>
-                  <td className="px-4 py-3 text-gray-700">{doc.doc_type_display}</td>
-                  <td className="px-4 py-3 text-gray-700">{doc.supplier_name || '—'}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{doc.document_number || '—'}</td>
-                  <td className="px-4 py-3 text-gray-700 tabular-nums">{fmt(doc.total_amount)}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={doc.source} label={doc.source_display} />
-                  </td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3.5 text-gray-700 font-medium">{doc.doc_type_display}</td>
+                  <td className="px-4 py-3.5 text-gray-600">{doc.supplier_name || '—'}</td>
+                  <td className="px-4 py-3.5 text-xs text-gray-400">{doc.document_number || '—'}</td>
+                  <td className="px-4 py-3.5 text-gray-700 tabular-nums">{fmt(doc.total_amount)}</td>
+                  <td className="px-4 py-3.5"><StatusBadge status={doc.source} label={doc.source_display} /></td>
+                  <td className="px-4 py-3.5">
                     <div className="flex items-center gap-2">
                       <StatusBadge status={doc.status} label={doc.status_display} />
                       {pollingIds.has(doc.id) && (
-                        <span className="text-xs text-gray-400 animate-pulse">elaborando…</span>
+                        <span className="text-xs text-blue-400 animate-pulse">elaborando…</span>
                       )}
                     </div>
                     {doc.status === 'error' && doc.error_message && (
-                      <p className="text-xs text-red-500 mt-0.5 max-w-48 truncate" title={doc.error_message}>
+                      <p className="text-xs text-red-400 mt-0.5 max-w-48 truncate" title={doc.error_message}>
                         {doc.error_message}
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-400">{fmtDate(doc.created_at)}</td>
-                  <td className="px-4 py-3">
-                    <Link
-                      href={`/documents/${doc.id}`}
-                      className="text-xs text-blue-600 hover:text-blue-800 font-medium whitespace-nowrap"
-                    >
+                  <td className="px-4 py-3.5 text-xs text-gray-400 whitespace-nowrap">{fmtDate(doc.created_at)}</td>
+                  <td className="px-4 py-3.5">
+                    <Link href={`/documents/${doc.id}`} className="text-xs font-medium text-blue-500 hover:text-blue-700 whitespace-nowrap transition-colors">
                       Dettaglio →
                     </Link>
                   </td>

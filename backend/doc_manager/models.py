@@ -14,6 +14,7 @@ class Document(models.Model):
         SHIPMENT = "shipment", "Spedizione"
         CONFIRMATION = "confirmation", "Conferma"
         SUMMARY = "summary", "Riepilogo"
+        INVENTORY = "inventory", "Inventario"
 
     class SourceChoices(models.TextChoices):
         UPLOAD = "upload", "Upload CSV/Excel"

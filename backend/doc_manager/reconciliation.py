@@ -11,24 +11,51 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # Embedding helpers
 # ─────────────────────────────────────────────
 
-_embed_cache: dict[str, list[float]] = {}
+import json
+import redis as redis_lib
+
+_redis = redis_lib.from_url(os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0").replace("/0", "/1"))
+_local_cache: dict[str, list[float]] = {}  # fallback in-process se Redis non risponde
 
 
 def _embed(text: str) -> list[float]:
     """
-    Embedding con cache in memoria per evitare chiamate duplicate.
-    Usa text-embedding-3-small: veloce, economico, 1536 dimensioni.
+    Embedding con doppia cache: Redis (condivisa tra tutti i worker Celery)
+    + dict in-process come fallback. Evita chiamate duplicate anche tra processi diversi.
+    TTL 24h su Redis — gli embedding di fornitori/descrizioni non cambiano.
     """
-    key = text.strip().lower()
-    if not key:
+    key_raw = text.strip().lower()[:200]
+    if not key_raw:
         return []
-    if key not in _embed_cache:
-        response = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=key,
-        )
-        _embed_cache[key] = response.data[0].embedding
-    return _embed_cache[key]
+
+    # 1. Cache in-process (zero latenza)
+    if key_raw in _local_cache:
+        return _local_cache[key_raw]
+
+    # 2. Cache Redis (condivisa tra worker)
+    redis_key = f"emb:{key_raw}"
+    try:
+        cached = _redis.get(redis_key)
+        if cached:
+            vec = json.loads(cached)
+            _local_cache[key_raw] = vec
+            return vec
+    except Exception:
+        pass  # Redis non disponibile → vai a OpenAI
+
+    # 3. Chiamata OpenAI
+    response = client.embeddings.create(
+        model="text-embedding-3-small",
+        input=key_raw,
+    )
+    vec = response.data[0].embedding
+    _local_cache[key_raw] = vec
+    try:
+        _redis.setex(redis_key, 86400, json.dumps(vec))  # TTL 24h
+    except Exception:
+        pass
+
+    return vec
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -598,10 +625,10 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
     # Coglie varianti come "TransLog S.p.A." vs "TransLog Express".
     if doc_a.supplier_name and doc_b.supplier_name:
         sup_sim = _supplier_similarity(doc_a.supplier_name, doc_b.supplier_name)
-        if sup_sim >= 0.92:
-            score += 30   # stesso fornitore
-        elif sup_sim >= 0.78:
-            score += 15   # probabilmente stesso fornitore, nome leggermente diverso
+        if sup_sim >= 0.88:
+            score += 30   # stesso fornitore (copre varianti come "Nordic Design AB" vs "Nordic Design")
+        elif sup_sim >= 0.72:
+            score += 15   # probabilmente stesso fornitore, nome diverso
 
     # Stessa data
     if doc_a.document_date and doc_b.document_date:
@@ -736,14 +763,37 @@ def are_documents_complementary(doc_a: Document, doc_b: Document) -> bool:
     same_type = doc_a.doc_type == doc_b.doc_type
     both_unknown_supplier = not doc_a.supplier_name and not doc_b.supplier_name
 
-    # Supplier similarity via embedding — più robusto dell'exact match.
+    # Supplier similarity via embedding
     same_supplier = False
     if doc_a.supplier_name and doc_b.supplier_name:
         same_supplier = _supplier_similarity(doc_a.supplier_name, doc_b.supplier_name) >= 0.82
 
-    # Fast-path: stesso tipo + (fornitore simile OPPURE fornitore sconosciuto)
-    if same_type and (same_supplier or both_unknown_supplier):
-        return True
+    if same_type:
+        # Tipi versionabili: tariffari, listini, conferme vengono aggiornati periodicamente.
+        # Stesso fornitore + stesso tipo = quasi certamente un confronto versioni.
+        _VERSIONABLE = {"price_list", "tariff", "confirmation", "summary", "inventory"}
+        if doc_a.doc_type in _VERSIONABLE:
+            if same_supplier or both_unknown_supplier:
+                return True
+
+        # Tipi transazionali: ogni ordine/fattura/DDT è un'entità distinta.
+        # Due ordini dello stesso fornitore NON sono complementari a meno che
+        # non condividano lo stesso numero documento (revisione/rettifica).
+        _TRANSACTIONAL = {"order", "invoice", "ddt", "packing_list", "shipment"}
+        if doc_a.doc_type in _TRANSACTIONAL:
+            if (same_supplier
+                    and doc_a.document_number
+                    and doc_b.document_number
+                    and doc_a.document_number.strip() == doc_b.document_number.strip()):
+                return True
+            # Due transazioni distinte dello stesso tipo non sono mai complementari,
+            # indipendentemente dal fornitore. GPT non serve — è una regola di dominio.
+            return False
+
+        # Tipo unknown senza fornitore → non abbiamo info sufficienti per escludere
+        if doc_a.doc_type not in _VERSIONABLE and doc_a.doc_type not in _TRANSACTIONAL:
+            if both_unknown_supplier:
+                return True
 
     # Fast-path: tipi complementari noti → risparmia una chiamata GPT
     _known_pairs = {
