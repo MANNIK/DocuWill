@@ -688,6 +688,20 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
             elif overlap >= 0.2:
                 score += 10
 
+        # Bonus sezione per doc non-standard: "ZONA A - ITALIA NORD" deve preferire
+        # "ZONA A - ITALIA NORD" rispetto a "ZONA B - ITALIA CENTRO-SUD".
+        # Evita il cross-matching tra sezioni diverse dello stesso tariffario.
+        sec_a = (doc_a.extracted_data or {}).get("section_name", "").strip()
+        sec_b = (doc_b.extracted_data or {}).get("section_name", "").strip()
+        if sec_a and sec_b:
+            sec_sim = _cosine(_embed(sec_a), _embed(sec_b))
+            if sec_sim >= 0.92:
+                score += 30   # stessa sezione (es. Zona A vs Zona A)
+            elif sec_sim >= 0.70:
+                score += 10   # sezioni simili
+            # Sezioni diverse: nessun bonus, lo score rimane basso
+            # e la coppia corretta (stessa sezione) vince il matching
+
     return min(score, 100)
 
 

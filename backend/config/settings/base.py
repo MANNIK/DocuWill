@@ -90,3 +90,8 @@ CORS_ALLOWED_ORIGINS = [
 
 # AI Service
 AI_SERVICE_URL = env("AI_SERVICE_URL")
+
+# Twilio WhatsApp — opzionali, se vuoti il webhook opera in dev mode (no firma)
+TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID", default="")
+TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN", default="")
+TWILIO_WHATSAPP_NUMBER = env("TWILIO_WHATSAPP_NUMBER", default="")

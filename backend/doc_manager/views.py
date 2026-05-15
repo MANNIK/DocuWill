@@ -1,8 +1,5 @@
-from django.shortcuts import render
-
-# Create your views here.
-import httpx
 from django.conf import settings
+from django.http import HttpResponse
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -99,42 +96,71 @@ class ImageUploadView(APIView):
 
 class WhatsAppWebhookView(APIView):
     """
-    Riceve il webhook WhatsApp (o il mock endpoint).
-    Payload atteso: {"from": "+39...", "media_url": "...", "caption": "..."}
+    Webhook WhatsApp compatibile con Twilio (form-data) e con il mock locale (JSON).
+
+    Formato Twilio (produzione):
+      POST multipart/form-data
+      From=whatsapp:+39..., MediaUrl0=https://..., Body=caption, NumMedia=1
+      Header X-Twilio-Signature per verifica HMAC
+
+    Formato mock (sviluppo locale, TWILIO_AUTH_TOKEN non configurato):
+      POST application/json
+      {"from": "+39...", "media_url": "...", "caption": "..."}
     """
     permission_classes = [AllowAny]
 
     def post(self, request):
-        media_url = request.data.get("media_url")
-        caption = request.data.get("caption", "")
-        sender = request.data.get("from", "")
+        twilio_configured = bool(settings.TWILIO_AUTH_TOKEN)
+
+        if twilio_configured:
+            # Verifica firma Twilio — protegge da chiamate non autorizzate
+            try:
+                from twilio.request_validator import RequestValidator
+                validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
+                url = request.build_absolute_uri()
+                signature = request.META.get("HTTP_X_TWILIO_SIGNATURE", "")
+                if not validator.validate(url, request.POST, signature):
+                    return Response({"error": "firma Twilio non valida"}, status=403)
+            except ImportError:
+                pass  # twilio non installato nel container ancora
+
+            # Parsare payload Twilio (form-data)
+            num_media = int(request.POST.get("NumMedia", 0))
+            if num_media == 0:
+                # Messaggio senza allegati — ack e ignora
+                return HttpResponse('<?xml version="1.0"?><Response/>', content_type="text/xml")
+
+            media_url = request.POST.get("MediaUrl0", "")
+            caption = request.POST.get("Body", "")
+            sender = request.POST.get("From", "")
+        else:
+            # Dev mode: payload JSON manuale per test locali senza Twilio
+            media_url = request.data.get("media_url", "")
+            caption = request.data.get("caption", "")
+            sender = request.data.get("from", "")
 
         if not media_url:
-            return Response(
-                {"error": "media_url è obbligatorio"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"error": "media_url mancante"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Crea il documento in stato pending
         document = Document.objects.create(
             source=Document.SourceChoices.WHATSAPP,
             status=Document.StatusChoices.PENDING,
             file_url=media_url,
         )
 
-        # Lancia il task Celery
         process_document_task.delay(
             document_id=document.id,
             file_content=None,
-            filename=None,
+            filename=f"whatsapp_{document.id}.jpg",
             media_url=media_url,
             caption=caption,
         )
 
-        return Response(
-            {"status": "received", "document_id": document.id},
-            status=status.HTTP_202_ACCEPTED,
-        )
+        if twilio_configured:
+            # Twilio richiede TwiML XML come risposta
+            return HttpResponse('<?xml version="1.0"?><Response/>', content_type="text/xml")
+
+        return Response({"status": "received", "document_id": document.id}, status=202)
 
 
 class ResetDatabaseView(APIView):

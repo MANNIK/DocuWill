@@ -54,7 +54,14 @@ Rispondi SOLO con JSON valido, nessun testo prima o dopo:
     }
   ],
   "raw_text": "tutto il testo estratto"
-}"""
+}
+
+Regole importanti:
+- quantity: se il documento ha più colonne quantità (es. QTÀ/COLLO e QTÀ TOTALE,
+  Qty per Box e Total Qty, Colli e Pezzi Totali), usa SEMPRE la colonna del TOTALE.
+  La quantità per collo/box è un dato logistico, non la quantità dell'articolo.
+- item_code: usa il codice articolo/prodotto (SKU, Cod. Art.), non numeri di riga
+  o riferimenti ordine se esiste già una colonna codice articolo separata."""
 
     try:
         message = client.chat.completions.create(

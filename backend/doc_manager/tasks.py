@@ -67,10 +67,25 @@ def process_document_task(
             find_and_reconcile(document)
 
         elif document.source == Document.SourceChoices.WHATSAPP:
+            # Le URL media di Twilio richiedono Basic Auth per il download.
+            # GPT-4o Vision non può accedere a URL autenticati, quindi
+            # scarichiamo i bytes qui e li mandiamo a /ocr/upload (come gli upload diretti).
+            auth = None
+            if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
+                auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+
+            with httpx.Client(timeout=60) as client:
+                media_resp = client.get(media_url, auth=auth)
+                media_resp.raise_for_status()
+                media_bytes = media_resp.content
+
+            ext = media_url.split(".")[-1].split("?")[0] if "." in media_url else "jpg"
+            fname = filename or f"whatsapp_{document.id}.{ext}"
+
             with httpx.Client(timeout=120) as client:
                 response = client.post(
-                    f"{settings.AI_SERVICE_URL}/ocr/image",
-                    json={"image_url": media_url, "caption": caption or ""},
+                    f"{settings.AI_SERVICE_URL}/ocr/upload",
+                    files={"file": (fname, media_bytes)},
                 )
                 response.raise_for_status()
                 parsed = response.json()

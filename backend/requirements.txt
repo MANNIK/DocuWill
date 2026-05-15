@@ -9,3 +9,4 @@ httpx==0.27.*
 pillow==10.*
 django-cors-headers==4.4.*
 openai==1.30.*
+twilio>=9.0.0
