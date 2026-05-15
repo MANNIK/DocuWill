@@ -16,7 +16,10 @@ function DocCard({ doc, label }: { doc: Document; label: string }) {
     <div className="bg-white rounded-xl ring-1 ring-gray-100 shadow-sm p-5">
       <div className="flex items-center justify-between mb-4">
         <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">{label}</span>
-        <StatusBadge status={doc.status} label={doc.status_display} />
+        <div className="flex items-center gap-1.5">
+          <StatusBadge status={doc.source} label={doc.source_display} />
+          <StatusBadge status={doc.status} label={doc.status_display} />
+        </div>
       </div>
       <p className="font-semibold text-gray-900 text-base">{doc.doc_type_display}</p>
       {doc.supplier_name && <p className="text-sm text-gray-500 mt-0.5">{doc.supplier_name}</p>}

@@ -158,6 +158,15 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
           <MetaRow label="Numero documento" value={doc.document_number} />
           <MetaRow label="Data documento" value={doc.document_date ?? ''} />
           <MetaRow label="Totale" value={doc.total_amount ? fmt(doc.total_amount, '€') : ''} />
+          {doc.file_url && (
+            <div className="flex gap-2">
+              <span className="text-xs text-gray-400 w-32 shrink-0">Immagine originale</span>
+              <a href={doc.file_url} target="_blank" rel="noopener noreferrer"
+                className="text-xs text-blue-500 hover:text-blue-700 underline">
+                Visualizza →
+              </a>
+            </div>
+          )}
         </div>
         {doc.status === 'error' && doc.error_message && (
           <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded text-xs text-red-700">
@@ -222,6 +231,20 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
                 ))}
               </div>
             </div>
+          )}
+
+          {/* Testo grezzo OCR — solo per documenti da foto (WhatsApp o upload immagine) */}
+          {(doc.source === 'whatsapp' || doc.source === 'image') &&
+           doc.extracted_data?.raw_text && (
+            <details className="group">
+              <summary className="cursor-pointer text-xs font-medium text-gray-500 hover:text-gray-700 flex items-center gap-1.5 select-none">
+                <span className="group-open:rotate-90 transition-transform inline-block">▶</span>
+                Testo grezzo estratto dall&apos;OCR
+              </summary>
+              <pre className="mt-2 text-xs text-gray-500 whitespace-pre-wrap bg-gray-50 rounded-lg p-3 leading-relaxed max-h-64 overflow-y-auto">
+                {doc.extracted_data.raw_text as string}
+              </pre>
+            </details>
           )}
 
           {/* Campi originali CSV — mostrati solo per doc standard (quelli non-standard
