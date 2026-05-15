@@ -71,5 +71,20 @@ services:
     depends_on:
       - backend
 
+  # Tunnel pubblico HTTPS per ricevere webhook Twilio in locale.
+  # Avviare solo quando si testa WhatsApp: docker compose up ngrok
+  # URL pubblico: http://localhost:4040 oppure docker compose logs ngrok
+  ngrok:
+    image: ngrok/ngrok:latest
+    command: http backend:8000 --log=stdout
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    ports:
+      - "4040:4040"
+    depends_on:
+      - backend
+    profiles:
+      - whatsapp
+
 volumes:
   postgres_data:
