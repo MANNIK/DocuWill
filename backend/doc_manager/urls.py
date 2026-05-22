@@ -11,6 +11,9 @@ urlpatterns = [
     # Webhook WhatsApp
     path("webhook/whatsapp/", views.WhatsAppWebhookView.as_view(), name="whatsapp-webhook"),
 
+    # Auth
+    path("auth/register/", views.RegisterView.as_view(), name="register"),
+
     # Dev utility
     path("dev/reset/", views.ResetDatabaseView.as_view(), name="dev-reset"),
 

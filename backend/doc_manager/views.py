@@ -172,6 +172,27 @@ class WhatsAppWebhookView(APIView):
         return Response({"status": "received", "document_id": document.id}, status=202)
 
 
+class RegisterView(APIView):
+    """Registrazione nuovo operatore."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from django.contrib.auth.models import User
+        username = request.data.get("username", "").strip()
+        password = request.data.get("password", "")
+        email = request.data.get("email", "").strip()
+
+        if not username or not password:
+            return Response({"error": "username e password obbligatori"}, status=400)
+        if len(password) < 6:
+            return Response({"error": "password troppo corta (min 6 caratteri)"}, status=400)
+        if User.objects.filter(username=username).exists():
+            return Response({"error": "username già in uso"}, status=400)
+
+        User.objects.create_user(username=username, password=password, email=email)
+        return Response({"message": "Account creato. Puoi ora accedere."}, status=201)
+
+
 class ResetDatabaseView(APIView):
     """Elimina tutti i documenti, riconciliazioni e discrepanze. Solo per sviluppo."""
     permission_classes = [AllowAny]

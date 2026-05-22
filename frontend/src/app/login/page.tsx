@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
@@ -84,6 +85,13 @@ export default function LoginPage() {
               {loading ? 'Accesso in corso…' : 'Accedi'}
             </button>
           </form>
+
+          <p className="text-center text-xs text-gray-400 mt-4">
+            Non hai un account?{' '}
+            <Link href="/register" className="text-blue-500 hover:text-blue-700 font-medium">
+              Registrati
+            </Link>
+          </p>
         </div>
       </div>
     </main>
