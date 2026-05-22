@@ -15,6 +15,7 @@ async function apiFetch(url: string, options: RequestInit = {}): Promise<Respons
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     window.location.href = '/login'
+    throw new Error('Unauthorized')  // ferma l'esecuzione mentre il redirect avviene
   }
   return res
 }

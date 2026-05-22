@@ -14,7 +14,7 @@ export default function ReconciliationsPage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getReconciliations().then(setRecs).finally(() => setLoading(false))
+    getReconciliations())\.catch(() => {})\.finally(() => setLoading(false))
   }, [])
 
   return (

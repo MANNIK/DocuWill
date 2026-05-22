@@ -23,6 +23,7 @@ export default function Dashboard() {
 
   const reload = useCallback(async () => {
     try { setDocs(await getDocuments()) }
+    catch { /* 401 → apiFetch redirige a /login */ }
     finally { setLoading(false) }
   }, [])
 

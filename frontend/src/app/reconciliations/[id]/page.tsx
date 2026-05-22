@@ -58,6 +58,7 @@ export default function ReconciliationDetail({ params }: { params: Promise<{ id:
   useEffect(() => {
     getReconciliation(Number(id))
       .then(data => { setRec(data); setNotes(data.operator_notes) })
+      .catch(() => {})
       .finally(() => setLoading(false))
   }, [id])
 
