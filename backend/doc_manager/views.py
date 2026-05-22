@@ -113,11 +113,20 @@ class WhatsAppWebhookView(APIView):
         twilio_configured = bool(settings.TWILIO_AUTH_TOKEN)
 
         if twilio_configured:
-            # Verifica firma Twilio — protegge da chiamate non autorizzate
+            # Verifica firma Twilio — protegge da chiamate non autorizzate.
+            # Quando Django è dietro ngrok/proxy, request.build_absolute_uri()
+            # restituisce http://backend:8000/... invece dell'URL pubblico.
+            # Usiamo X-Forwarded-Proto e X-Forwarded-Host che ngrok imposta
+            # per ricostruire l'URL esatto che Twilio ha usato per firmare.
             try:
                 from twilio.request_validator import RequestValidator
                 validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
-                url = request.build_absolute_uri()
+
+                proto = request.META.get("HTTP_X_FORWARDED_PROTO", "https")
+                host = request.META.get("HTTP_X_FORWARDED_HOST",
+                       request.META.get("HTTP_HOST", ""))
+                url = f"{proto}://{host}{request.path}"
+
                 signature = request.META.get("HTTP_X_TWILIO_SIGNATURE", "")
                 if not validator.validate(url, request.POST, signature):
                     return Response({"error": "firma Twilio non valida"}, status=403)

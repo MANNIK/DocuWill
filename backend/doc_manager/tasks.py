@@ -74,7 +74,7 @@ def process_document_task(
             if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
                 auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
 
-            with httpx.Client(timeout=60) as client:
+            with httpx.Client(timeout=60, follow_redirects=True) as client:
                 media_resp = client.get(media_url, auth=auth)
                 media_resp.raise_for_status()
                 media_bytes = media_resp.content

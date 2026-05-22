@@ -57,9 +57,12 @@ Rispondi SOLO con JSON valido, nessun testo prima o dopo:
 }
 
 Regole importanti:
-- quantity: se il documento ha più colonne quantità (es. QTÀ/COLLO e QTÀ TOTALE,
-  Qty per Box e Total Qty, Colli e Pezzi Totali), usa SEMPRE la colonna del TOTALE.
-  La quantità per collo/box è un dato logistico, non la quantità dell'articolo.
+- quantity: nei DDT e packing list ci sono spesso più colonne numeriche per riga.
+  Usa SEMPRE la colonna della quantità TOTALE dell'articolo (QTÀ TOTALE, Total Qty,
+  Pezzi Totali, Quantità Totale).
+  Ignora come quantity: COLLI (numero di colli/scatole), QTÀ/COLLO (pezzi per collo),
+  Qty per Box, Boxes — sono dati logistici del trasporto, non la quantità ordinata.
+  Regola pratica: se vedi colonne COLLI + QTÀ/COLLO + QTÀ TOTALE, usa solo QTÀ TOTALE.
 - item_code: usa il codice articolo/prodotto (SKU, Cod. Art.), non numeri di riga
   o riferimenti ordine se esiste già una colonna codice articolo separata."""
 

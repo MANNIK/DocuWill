@@ -3,6 +3,7 @@ import os
 import re
 from difflib import SequenceMatcher
 from openai import OpenAI
+import redis as redis_lib
 from .models import Document, Reconciliation, Discrepancy
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
@@ -10,9 +11,6 @@ client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 # ─────────────────────────────────────────────
 # Embedding helpers
 # ─────────────────────────────────────────────
-
-import json
-import redis as redis_lib
 
 _redis = redis_lib.from_url(os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0").replace("/0", "/1"))
 _local_cache: dict[str, list[float]] = {}  # fallback in-process se Redis non risponde

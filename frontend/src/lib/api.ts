@@ -37,7 +37,7 @@ export interface Document {
   document_number: string
   total_amount: string | null
   error_message: string
-  file_url: string
+  file_url: string | null
   extracted_data: ExtractedData
   rows: DocumentRow[]
   created_at: string
