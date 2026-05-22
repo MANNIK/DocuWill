@@ -120,7 +120,7 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    getDocument(Number(id)).then(setDoc).finally(() => setLoading(false))
+    getDocument(Number(id)).then(setDoc).catch(() => {}).finally(() => setLoading(false))
   }, [id])
 
   if (loading) return <main className="max-w-7xl mx-auto px-4 py-8"><p className="text-sm text-gray-400">Caricamento...</p></main>
