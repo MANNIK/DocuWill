@@ -1,6 +1,6 @@
 'use client'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { IconFileText, IconGitMerge } from './Icons'
 
 const links = [
@@ -10,6 +10,14 @@ const links = [
 
 export default function NavBar() {
   const pathname = usePathname()
+  const router = useRouter()
+
+  function handleLogout() {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    router.push('/login')
+  }
+
   return (
     <nav className="border-b border-gray-100 bg-white sticky top-0 z-10">
       <div className="max-w-7xl mx-auto px-6 flex items-center h-14 gap-10">
@@ -22,7 +30,7 @@ export default function NavBar() {
         </Link>
 
         {/* Nav links */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-1">
           {links.map(({ href, label, icon: Icon }) => {
             const active = pathname === href
             return (
@@ -41,6 +49,14 @@ export default function NavBar() {
             )
           })}
         </div>
+
+        {/* Logout */}
+        <button
+          onClick={handleLogout}
+          className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          Esci
+        </button>
       </div>
     </nav>
   )

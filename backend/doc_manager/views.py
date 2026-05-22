@@ -3,7 +3,7 @@ from django.http import HttpResponse
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from .models import Document, Reconciliation
 from .serializers import (
@@ -19,14 +19,14 @@ class DocumentListView(generics.ListAPIView):
     """Lista di tutti i documenti."""
     queryset = Document.objects.prefetch_related("rows").all()
     serializer_class = DocumentSerializer
-    permission_classes = [AllowAny]  # toglieremo AllowAny quando aggiungiamo auth
+    permission_classes = [IsAuthenticated]  # toglieremo AllowAny quando aggiungiamo auth
 
 
 class DocumentDetailView(generics.RetrieveAPIView):
     """Dettaglio di un singolo documento."""
     queryset = Document.objects.prefetch_related("rows").all()
     serializer_class = DocumentSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
 
 class DocumentUploadView(APIView):
@@ -34,7 +34,7 @@ class DocumentUploadView(APIView):
     Riceve il file CSV/Excel dall'operatore,
     crea il Document e lancia il task Celery.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         serializer = DocumentUploadSerializer(data=request.data)
@@ -71,7 +71,7 @@ class ImageUploadView(APIView):
     Riceve un file immagine (jpg/png) dall'operatore — simula il flusso WhatsApp
     senza bisogno di un URL pubblico. Utile per testare l'OCR localmente.
     """
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
         file = request.FILES.get("file")
@@ -191,7 +191,7 @@ class ReconciliationListView(generics.ListAPIView):
         "doc1", "doc2"
     ).prefetch_related("discrepancy_list").all()
     serializer_class = ReconciliationSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
 
 class ReconciliationDetailView(generics.RetrieveAPIView):
@@ -200,12 +200,12 @@ class ReconciliationDetailView(generics.RetrieveAPIView):
         "doc1", "doc2"
     ).prefetch_related("discrepancy_list").all()
     serializer_class = ReconciliationSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
 
 class ReconciliationUpdateView(generics.UpdateAPIView):
     """L'operatore approva, rifiuta o corregge una riconciliazione."""
     queryset = Reconciliation.objects.all()
     serializer_class = ReconciliationUpdateSerializer
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
     http_method_names = ["patch"]

@@ -1,5 +1,24 @@
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
+function authHeaders(): Record<string, string> {
+  if (typeof window === 'undefined') return {}
+  const token = localStorage.getItem('access_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const res = await fetch(url, {
+    ...options,
+    headers: { ...authHeaders(), ...(options.headers as Record<string, string> ?? {}) },
+  })
+  if (res.status === 401 && typeof window !== 'undefined') {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    window.location.href = '/login'
+  }
+  return res
+}
+
 export interface DocumentRow {
   id: number
   row_index: number
@@ -70,13 +89,13 @@ export interface Reconciliation {
 }
 
 export async function getDocuments(): Promise<Document[]> {
-  const res = await fetch(`${API}/api/documents/`, { cache: 'no-store' })
+  const res = await apiFetch(`\${API}/api/documents/`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Errore caricamento documenti')
   return res.json()
 }
 
 export async function getDocument(id: number): Promise<Document> {
-  const res = await fetch(`${API}/api/documents/${id}/`, { cache: 'no-store' })
+  const res = await apiFetch(`\${API}/api/documents/${id}/`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Documento non trovato')
   return res.json()
 }
@@ -84,7 +103,7 @@ export async function getDocument(id: number): Promise<Document> {
 export async function uploadDocument(file: File): Promise<Document> {
   const body = new FormData()
   body.append('file', file)
-  const res = await fetch(`${API}/api/documents/upload/`, { method: 'POST', body })
+  const res = await apiFetch(`\${API}/api/documents/upload/`, { method: 'POST', body })
   if (!res.ok) throw new Error('Upload fallito')
   return res.json()
 }
@@ -92,25 +111,25 @@ export async function uploadDocument(file: File): Promise<Document> {
 export async function uploadImage(file: File): Promise<Document> {
   const body = new FormData()
   body.append('file', file)
-  const res = await fetch(`${API}/api/documents/upload-image/`, { method: 'POST', body })
+  const res = await apiFetch(`\${API}/api/documents/upload-image/`, { method: 'POST', body })
   if (!res.ok) throw new Error('Upload immagine fallito')
   return res.json()
 }
 
 export async function resetDatabase(): Promise<{ deleted: number }> {
-  const res = await fetch(`${API}/api/dev/reset/`, { method: 'POST' })
+  const res = await apiFetch(`\${API}/api/dev/reset/`, { method: 'POST' })
   if (!res.ok) throw new Error('Reset fallito')
   return res.json()
 }
 
 export async function getReconciliations(): Promise<Reconciliation[]> {
-  const res = await fetch(`${API}/api/reconciliations/`, { cache: 'no-store' })
+  const res = await apiFetch(`\${API}/api/reconciliations/`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Errore caricamento riconciliazioni')
   return res.json()
 }
 
 export async function getReconciliation(id: number): Promise<Reconciliation> {
-  const res = await fetch(`${API}/api/reconciliations/${id}/`, { cache: 'no-store' })
+  const res = await apiFetch(`\${API}/api/reconciliations/${id}/`, { cache: 'no-store' })
   if (!res.ok) throw new Error('Riconciliazione non trovata')
   return res.json()
 }
@@ -120,7 +139,7 @@ export async function reviewReconciliation(
   status: 'approved' | 'rejected' | 'corrected',
   operator_notes = '',
 ): Promise<Reconciliation> {
-  const res = await fetch(`${API}/api/reconciliations/${id}/review/`, {
+  const res = await apiFetch(`\${API}/api/reconciliations/${id}/review/`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status, operator_notes }),
