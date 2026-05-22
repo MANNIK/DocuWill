@@ -130,7 +130,7 @@ def _save_ocr_result(document, parsed: dict):
         DocumentRow(
             document=document,
             row_index=i,
-            item_code=row.get("item_code", ""),
+            item_code=row.get("item_code") or "",
             description=row.get("description", ""),
             quantity=row.get("quantity"),
             unit=row.get("unit", ""),
@@ -170,7 +170,7 @@ def _update_document(document, parsed: dict):
         DocumentRow(
             document=document,
             row_index=row.get("row_index", i),
-            item_code=row.get("item_code", ""),
+            item_code=row.get("item_code") or "",
             description=row.get("description", ""),
             quantity=row.get("quantity"),
             unit=row.get("unit", ""),
