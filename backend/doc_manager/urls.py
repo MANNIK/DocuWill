@@ -21,4 +21,12 @@ urlpatterns = [
     path("reconciliations/", views.ReconciliationListView.as_view(), name="reconciliation-list"),
     path("reconciliations/<int:pk>/", views.ReconciliationDetailView.as_view(), name="reconciliation-detail"),
     path("reconciliations/<int:pk>/review/", views.ReconciliationUpdateView.as_view(), name="reconciliation-review"),
+
+    # UI v2 — nuovi endpoint
+    path("dashboard/stats/", views.DashboardStatsView.as_view(), name="dashboard-stats"),
+    path("whatsapp/inbox/", views.WhatsAppInboxView.as_view(), name="whatsapp-inbox"),
+    path("suppliers/", views.SuppliersListView.as_view(), name="suppliers-list"),
+    path("suppliers/<str:name>/", views.SupplierDetailView.as_view(), name="supplier-detail"),
+    path("settings/", views.SettingsView.as_view(), name="settings"),
+    path("settings/cache/", views.ClearCacheView.as_view(), name="settings-cache"),
 ]

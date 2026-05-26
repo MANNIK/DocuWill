@@ -148,3 +148,88 @@ export async function reviewReconciliation(
   if (!res.ok) throw new Error('Revisione fallita')
   return res.json()
 }
+
+// ─── Tipi e fetcher per UI v2 ────────────────────────────────────────────────
+
+export interface Supplier {
+  name: string
+  doc_count: number
+  last_upload: string
+  match_rate: number
+}
+
+export interface CachedMapping {
+  headers_fingerprint: string
+  mapping: Record<string, string>
+  doc_type: string
+  ttl_days: number
+}
+
+export interface SupplierDetail extends Supplier {
+  docs_by_type: Record<string, number>
+  cached_mappings: CachedMapping[]
+}
+
+export interface AppSettings {
+  whatsapp_provider: string
+  ocr_engine: string
+  match_threshold: number
+  fuzzy_threshold: number
+  updated_at: string
+}
+
+export interface DashboardStats {
+  pending: number
+  processed_today: number
+  match_rate: number
+  avg_processing_ms: number
+  queue: Reconciliation[]
+  ingestion_7d: { date: string; count: number }[]
+  discrepancy_histogram: { discrepancy_type: string; count: number }[]
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const res = await apiFetch(`${API}/api/dashboard/stats/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore statistiche')
+  return res.json()
+}
+
+export async function getWhatsAppInbox(): Promise<Document[]> {
+  const res = await apiFetch(`${API}/api/whatsapp/inbox/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore inbox')
+  return res.json()
+}
+
+export async function getSuppliers(): Promise<Supplier[]> {
+  const res = await apiFetch(`${API}/api/suppliers/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore fornitori')
+  return res.json()
+}
+
+export async function getSupplier(name: string): Promise<SupplierDetail> {
+  const res = await apiFetch(`${API}/api/suppliers/${encodeURIComponent(name)}/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Fornitore non trovato')
+  return res.json()
+}
+
+export async function getSettings(): Promise<AppSettings> {
+  const res = await apiFetch(`${API}/api/settings/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore impostazioni')
+  return res.json()
+}
+
+export async function updateSettings(data: Partial<AppSettings>): Promise<AppSettings> {
+  const res = await apiFetch(`${API}/api/settings/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) throw new Error('Errore salvataggio impostazioni')
+  return res.json()
+}
+
+export async function clearCache(): Promise<{ deleted: number }> {
+  const res = await apiFetch(`${API}/api/settings/cache/`, { method: 'DELETE' })
+  if (!res.ok) throw new Error('Errore pulizia cache')
+  return res.json()
+}

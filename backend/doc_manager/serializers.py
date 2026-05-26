@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Document, DocumentRow, Reconciliation, Discrepancy
+from .models import Document, DocumentRow, Reconciliation, Discrepancy, AppSettings
 
 
 class DocumentRowSerializer(serializers.ModelSerializer):
@@ -126,3 +126,31 @@ class ReconciliationUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Reconciliation
         fields = ["status", "operator_notes"]
+
+
+class AppSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AppSettings
+        fields = ["whatsapp_provider", "ocr_engine", "match_threshold", "fuzzy_threshold", "updated_at"]
+        read_only_fields = ["updated_at"]
+
+
+class DocumentListSerializer(serializers.ModelSerializer):
+    """Versione leggera di DocumentSerializer per liste (senza rows)."""
+    class Meta:
+        model = Document
+        fields = [
+            "id", "source", "source_display", "doc_type", "doc_type_display",
+            "status", "status_display", "original_filename", "supplier_name",
+            "document_date", "document_number", "total_amount", "error_message",
+            "file_url", "created_at", "updated_at",
+        ]
+        extra_kwargs = {
+            "source_display": {"source": "get_source_display", "read_only": True},
+            "doc_type_display": {"source": "get_doc_type_display", "read_only": True},
+            "status_display": {"source": "get_status_display", "read_only": True},
+        }
+
+    source_display = serializers.CharField(source="get_source_display", read_only=True)
+    doc_type_display = serializers.CharField(source="get_doc_type_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)

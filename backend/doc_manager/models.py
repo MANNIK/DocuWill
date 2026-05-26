@@ -1,6 +1,25 @@
 from django.db import models
 
 
+class AppSettings(models.Model):
+    """Singleton per le impostazioni dell'applicazione."""
+    whatsapp_provider = models.CharField(max_length=20, default='mock')
+    ocr_engine = models.CharField(max_length=20, default='gpt-4o')
+    match_threshold = models.IntegerField(default=30)
+    fuzzy_threshold = models.FloatField(default=0.9)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Impostazioni"
+
+    @classmethod
+    def get_solo(cls):
+        obj = cls.objects.first()
+        if obj is None:
+            obj = cls.objects.create()
+        return obj
+
+
 class Document(models.Model):
     """Rappresenta un documento caricato nel sistema (doc1 o doc2)."""
 

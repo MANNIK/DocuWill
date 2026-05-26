@@ -1,12 +1,20 @@
+import hashlib
+import json
+from datetime import date, timedelta
+
 from django.conf import settings
 from django.http import HttpResponse
+from django.db.models import Avg, Count, F, ExpressionWrapper, DurationField
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from .models import Document, Reconciliation
+from .models import AppSettings, Discrepancy, Document, Reconciliation
 from .serializers import (
+    AppSettingsSerializer,
+    DocumentListSerializer,
     DocumentSerializer,
     DocumentUploadSerializer,
     ReconciliationSerializer,
@@ -230,3 +238,197 @@ class ReconciliationUpdateView(generics.UpdateAPIView):
     serializer_class = ReconciliationUpdateSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ["patch"]
+
+
+# ─── Nuovi endpoint per UI v2 ────────────────────────────────────────────────
+
+class DashboardStatsView(APIView):
+    """KPI aggregati per la dashboard v2."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        today = timezone.now().date()
+        seven_days_ago = today - timedelta(days=6)
+
+        pending = Document.objects.filter(status=Document.StatusChoices.PENDING).count()
+        processed_today = Document.objects.filter(
+            status=Document.StatusChoices.PROCESSED,
+            updated_at__date=today,
+        ).count()
+
+        recon_total = Reconciliation.objects.count()
+        recon_approved = Reconciliation.objects.filter(
+            status=Reconciliation.StatusChoices.APPROVED
+        ).count()
+        match_rate = round(recon_approved / recon_total * 100) if recon_total else 0
+
+        avg_ms = Document.objects.filter(
+            status=Document.StatusChoices.PROCESSED
+        ).annotate(
+            duration=ExpressionWrapper(
+                F('updated_at') - F('created_at'),
+                output_field=DurationField()
+            )
+        ).aggregate(avg=Avg('duration'))['avg']
+        avg_processing_ms = int(avg_ms.total_seconds() * 1000) if avg_ms else 0
+
+        queue = ReconciliationSerializer(
+            Reconciliation.objects.select_related('doc1', 'doc2')
+            .prefetch_related('discrepancy_list')[:8],
+            many=True
+        ).data
+
+        ingestion_7d = []
+        for i in range(7):
+            d = seven_days_ago + timedelta(days=i)
+            cnt = Document.objects.filter(created_at__date=d).count()
+            ingestion_7d.append({"date": d.isoformat(), "count": cnt})
+
+        disc_histogram = list(
+            Discrepancy.objects.values('discrepancy_type')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        )
+
+        return Response({
+            "pending": pending,
+            "processed_today": processed_today,
+            "match_rate": match_rate,
+            "avg_processing_ms": avg_processing_ms,
+            "queue": queue,
+            "ingestion_7d": ingestion_7d,
+            "discrepancy_histogram": disc_histogram,
+        })
+
+
+class WhatsAppInboxView(generics.ListAPIView):
+    """Lista documenti ricevuti via WhatsApp/immagine per l'inbox v2."""
+    serializer_class = DocumentListSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Document.objects.filter(
+            source__in=[Document.SourceChoices.WHATSAPP, Document.SourceChoices.IMAGE]
+        ).order_by('-created_at')
+
+
+class SuppliersListView(APIView):
+    """Lista fornitori con statistiche aggregate."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import Max, Q
+        suppliers = (
+            Document.objects
+            .exclude(supplier_name='')
+            .values('supplier_name')
+            .annotate(
+                doc_count=Count('id'),
+                last_upload=Max('created_at'),
+            )
+            .order_by('-doc_count')
+        )
+
+        result = []
+        for s in suppliers:
+            name = s['supplier_name']
+            recon_q = Reconciliation.objects.filter(
+                Q(doc1__supplier_name=name) | Q(doc2__supplier_name=name)
+            )
+            total_recon = recon_q.count()
+            approved = recon_q.filter(status=Reconciliation.StatusChoices.APPROVED).count()
+            match_rate = round(approved / total_recon * 100) if total_recon else 0
+            result.append({
+                "name": name,
+                "doc_count": s['doc_count'],
+                "last_upload": s['last_upload'],
+                "match_rate": match_rate,
+            })
+
+        return Response(result)
+
+
+class SupplierDetailView(APIView):
+    """Dettaglio fornitore con stats e cache mapping Redis."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, name):
+        from django.db.models import Q
+        docs = Document.objects.filter(supplier_name=name)
+        if not docs.exists():
+            return Response({"error": "Fornitore non trovato"}, status=404)
+
+        by_type = dict(docs.values('doc_type').annotate(c=Count('id')).values_list('doc_type', 'c'))
+        recon_q = Reconciliation.objects.filter(
+            Q(doc1__supplier_name=name) | Q(doc2__supplier_name=name)
+        )
+        total_recon = recon_q.count()
+        approved = recon_q.filter(status=Reconciliation.StatusChoices.APPROVED).count()
+        match_rate = round(approved / total_recon * 100) if total_recon else 0
+
+        cached_mappings = []
+        try:
+            import redis as redis_lib
+            broker_url = getattr(settings, 'CELERY_BROKER_URL', 'redis://redis:6379/0')
+            cache_url = broker_url.rsplit('/', 1)[0] + '/2'
+            r = redis_lib.from_url(cache_url, socket_connect_timeout=1)
+            name_hash = hashlib.md5(name.lower().encode()).hexdigest()[:12]
+            keys = r.keys(f'col_map:{name_hash}:*')
+            for key in keys:
+                raw = r.get(key)
+                if raw:
+                    data = json.loads(raw)
+                    ttl = r.ttl(key)
+                    fingerprint = key.decode().split(':')[-1] if isinstance(key, bytes) else key.split(':')[-1]
+                    cached_mappings.append({
+                        "headers_fingerprint": fingerprint,
+                        "mapping": data.get("column_mapping", {}),
+                        "doc_type": data.get("doc_type", ""),
+                        "ttl_days": round(ttl / 86400) if ttl > 0 else 0,
+                    })
+        except Exception:
+            pass
+
+        return Response({
+            "name": name,
+            "doc_count": docs.count(),
+            "match_rate": match_rate,
+            "docs_by_type": by_type,
+            "cached_mappings": cached_mappings,
+        })
+
+
+class SettingsView(APIView):
+    """Legge e aggiorna le impostazioni applicazione."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        obj = AppSettings.get_solo()
+        return Response(AppSettingsSerializer(obj).data)
+
+    def patch(self, request):
+        obj = AppSettings.get_solo()
+        serializer = AppSettingsSerializer(obj, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ClearCacheView(APIView):
+    """Svuota la cache Redis dei column mapping per i fornitori (DB 2)."""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        try:
+            import redis as redis_lib
+            broker_url = getattr(settings, 'CELERY_BROKER_URL', 'redis://redis:6379/0')
+            cache_url = broker_url.rsplit('/', 1)[0] + '/2'
+            r = redis_lib.from_url(cache_url, socket_connect_timeout=1)
+            keys = r.keys('col_map:*')
+            deleted = len(keys)
+            if keys:
+                r.delete(*keys)
+            return Response({"deleted": deleted})
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
