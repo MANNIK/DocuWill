@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Conferma Ordine Alpine Möbel — CO-2026-0341</title>
+<style>
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #1a1a1a; background: #fff; }
+.page { max-width: 210mm; margin: 0 auto; padding: 20mm 18mm; }
+
+/* Header aziendale */
+.header { display: flex; justify-content: space-between; align-items: flex-start;
+          border-bottom: 3px solid #1a3a5c; padding-bottom: 12px; margin-bottom: 16px; }
+.company-info h1 { font-size: 18pt; font-weight: 900; color: #1a3a5c; letter-spacing: 1px; }
+.company-info p { font-size: 9pt; color: #555; line-height: 1.5; margin-top: 4px; }
+.doc-box { border: 2px solid #1a3a5c; padding: 10px 16px; text-align: center; min-width: 180px; }
+.doc-box .doc-type { font-size: 13pt; font-weight: 700; color: #1a3a5c; text-transform: uppercase;
+                     letter-spacing: 2px; }
+.doc-box .doc-number { font-size: 12pt; font-weight: 600; margin-top: 4px; }
+.doc-box .doc-date { font-size: 9pt; color: #555; margin-top: 2px; }
+
+/* Sezione parti */
+.parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+.party-box { border: 1px solid #ccc; padding: 10px 12px; border-radius: 3px; }
+.party-box .label { font-size: 8pt; font-weight: 700; color: #888; text-transform: uppercase;
+                    letter-spacing: 1px; margin-bottom: 4px; }
+.party-box .name { font-size: 11pt; font-weight: 700; color: #1a1a1a; }
+.party-box p { font-size: 9pt; color: #444; line-height: 1.5; margin-top: 2px; }
+
+/* Riferimenti */
+.refs { background: #f4f6f9; padding: 8px 12px; border-radius: 3px; margin-bottom: 16px;
+        font-size: 9.5pt; display: flex; gap: 24px; flex-wrap: wrap; }
+.refs span { color: #555; }
+.refs strong { color: #1a1a1a; }
+
+/* Tabella dati */
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+thead tr { background: #1a3a5c; color: white; }
+thead th { padding: 8px 10px; text-align: left; font-size: 9.5pt; font-weight: 600; }
+tbody tr:nth-child(even) { background: #f8f9fb; }
+tbody tr:hover { background: #eef1f6; }
+tbody td { padding: 7px 10px; font-size: 10pt; border-bottom: 1px solid #e8e8e8; vertical-align: middle; }
+.td-code { font-family: monospace; font-size: 9.5pt; font-weight: 600; color: #1a3a5c; }
+.td-num { text-align: right; }
+.td-total { text-align: right; font-weight: 600; }
+
+/* Totali */
+.totals { margin-left: auto; width: 280px; border-top: 2px solid #1a3a5c; margin-top: 8px; }
+.totals tr td { padding: 5px 10px; font-size: 10pt; }
+.totals tr:last-child td { font-weight: 700; font-size: 12pt; color: #1a3a5c;
+                            border-top: 1px solid #ccc; padding-top: 8px; }
+
+/* Note */
+.notes { margin-top: 16px; padding: 10px 12px; border-left: 3px solid #1a3a5c;
+         background: #f9fafb; font-size: 9.5pt; color: #444; }
+.notes strong { color: #1a3a5c; }
+
+/* Footer */
+.footer { margin-top: 32px; display: flex; justify-content: space-between;
+          align-items: flex-end; border-top: 1px solid #ccc; padding-top: 16px; }
+.footer-info { font-size: 8.5pt; color: #666; line-height: 1.6; }
+.stamp { width: 80px; height: 80px; border: 3px solid #1a3a5c; border-radius: 50%;
+         display: flex; align-items: center; justify-content: center; text-align: center;
+         color: #1a3a5c; font-size: 7pt; font-weight: 700; text-transform: uppercase;
+         line-height: 1.3; padding: 8px; }
+.signature { text-align: center; font-size: 9pt; color: #555; }
+.signature-line { border-bottom: 1px solid #555; width: 120px; height: 30px; margin: 0 auto 4px; }
+
+@media print { @page { size: A4; margin: 0; } .page { padding: 15mm 16mm; } }
+
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="header">
+  <div class="company-info">
+    <h1>ALPINE MÖBEL AG</h1>
+    <p>Bergstraße 22 · 6020 Innsbruck · Austria<br>
+       UID: ATU45678901 · Tel: +43 512 555 0177<br>
+       Email: orders@alpinemoebel.at · alpinemoebel.at</p>
+  </div>
+  <div class="doc-box">
+    <div class="doc-type">Conferma d'Ordine</div>
+    <div class="doc-number">N. CO-2026-0341</div>
+    <div class="doc-date">Data: 05/03/2026</div>
+  </div>
+</div>
+
+<div class="parties">
+  <div class="party-box">
+    <div class="label">Fornitore / Lieferant</div>
+    <div class="name">Alpine Möbel AG</div>
+    <p>Bergstraße 22<br>6020 Innsbruck<br>Austria</p>
+    <p style="margin-top:6px;font-size:8.5pt;">UID: ATU45678901</p>
+  </div>
+  <div class="party-box">
+    <div class="label">Acquirente / Käufer</div>
+    <div class="name">EUROPACK LOGISTICS SRL</div>
+    <p>Via della Spedizione 5<br>40128 Bologna (BO)<br>Italy</p>
+    <p style="margin-top:6px;font-size:8.5pt;">P.IVA: IT08734120374</p>
+  </div>
+</div>
+
+<div class="refs">
+  <span><strong>Rif. Delivery Note:</strong> DL-7741 / DL-4469</span>
+  <span><strong>Data consegna prev.:</strong> 09/03/2026 – 10/03/2026</span>
+  <span><strong>Incoterm:</strong> FCA Innsbruck</span>
+  <span><strong>Pagamento:</strong> 60 gg d.f.f.m.</span>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Cod. Ordine</th>
+      <th>Codice Art.</th>
+      <th>Descrizione</th>
+      <th class="td-num">Q.tà Conf.</th>
+      <th>U.M.</th>
+      <th class="td-num">Prezzo Unit. €</th>
+      <th class="td-num">Totale €</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ORD-W11-01</td>
+      <td class="td-code">ALP-843</td>
+      <td>Armadio 2 ante scorrevoli</td>
+      <td class="td-num"><strong>4</strong></td>
+      <td>pz</td>
+      <td class="td-num">285,00</td>
+      <td class="td-total">1.140,00</td>
+    </tr>
+    <tr>
+      <td>ORD-W11-01</td>
+      <td class="td-code">ALP-574</td>
+      <td>Comò 4 cassetti</td>
+      <td class="td-num">14</td>
+      <td>pz</td>
+      <td class="td-num">195,00</td>
+      <td class="td-total">2.730,00</td>
+    </tr>
+    <tr>
+      <td>ORD-W11-02</td>
+      <td class="td-code">ALP-114</td>
+      <td>Comodino Legno di Pino Massiccio XL</td>
+      <td class="td-num">6</td>
+      <td>pz</td>
+      <td class="td-num"><strong>87,50</strong></td>
+      <td class="td-total">525,00</td>
+    </tr>
+    <tr>
+      <td>ORD-W11-03</td>
+      <td class="td-code">ALP-867</td>
+      <td>Scaffale 180cm</td>
+      <td class="td-num">8</td>
+      <td>pz</td>
+      <td class="td-num">145,00</td>
+      <td class="td-total">1.160,00</td>
+    </tr>
+    <tr>
+      <td>ORD-W11-03</td>
+      <td class="td-code">ALP-507</td>
+      <td>Scarpiera 3 ante</td>
+      <td class="td-num">2</td>
+      <td>pz</td>
+      <td class="td-num">115,00</td>
+      <td class="td-total">230,00</td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="totals">
+  <tr><td>Imponibile</td><td class="td-num">5.785,00 €</td></tr>
+  <tr><td>IVA 22%</td><td class="td-num">1.272,70 €</td></tr>
+  <tr><td>Totale</td><td class="td-num">7.057,70 €</td></tr>
+</table>
+
+<div class="notes">
+  <strong>Condizioni di consegna:</strong> La quantità dell'articolo ALP-843 è stata
+  confermata in 4 pz (disponibilità magazzino ridotta). Per la differenza di 2 pz
+  contattare l'ufficio commerciale. Articolo ALP-114 (Comodino): nuovo prezzo unitario
+  €87,50 (aggiornamento listino marzo 2026). Descrizione aggiornata con specifiche
+  materiale.
+</div>
+
+<div class="footer">
+  <div class="footer-info">
+    Alpine Möbel AG · FN 123456a Handelsgericht Innsbruck<br>
+    Bank: Raiffeisen Tirol · IBAN: AT12 3456 7890 1234 5678<br>
+    Documento valido 30 giorni dalla data di emissione
+  </div>
+  <div class="signature">
+    <div class="signature-line"></div>
+    <span>Responsabile Vendite</span>
+  </div>
+  <div class="stamp">ALPINE<br>MÖBEL AG<br>CONFIRMED</div>
+</div>
+
+</div>
+</body>
+</html>

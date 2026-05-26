@@ -10,3 +10,5 @@ pillow==10.*
 django-cors-headers==4.4.*
 openai==1.30.*
 twilio>=9.0.0
+pytest==8.*
+pytest-django==4.*

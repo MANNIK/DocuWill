@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<title>Fattura Proforma Acme Furniture — FP-2026-0118</title>
+<style>
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial, Helvetica, sans-serif; font-size: 11pt; color: #1a1a1a; background: #fff; }
+.page { max-width: 210mm; margin: 0 auto; padding: 20mm 18mm; }
+
+/* Header aziendale */
+.header { display: flex; justify-content: space-between; align-items: flex-start;
+          border-bottom: 3px solid #1a3a5c; padding-bottom: 12px; margin-bottom: 16px; }
+.company-info h1 { font-size: 18pt; font-weight: 900; color: #1a3a5c; letter-spacing: 1px; }
+.company-info p { font-size: 9pt; color: #555; line-height: 1.5; margin-top: 4px; }
+.doc-box { border: 2px solid #1a3a5c; padding: 10px 16px; text-align: center; min-width: 180px; }
+.doc-box .doc-type { font-size: 13pt; font-weight: 700; color: #1a3a5c; text-transform: uppercase;
+                     letter-spacing: 2px; }
+.doc-box .doc-number { font-size: 12pt; font-weight: 600; margin-top: 4px; }
+.doc-box .doc-date { font-size: 9pt; color: #555; margin-top: 2px; }
+
+/* Sezione parti */
+.parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+.party-box { border: 1px solid #ccc; padding: 10px 12px; border-radius: 3px; }
+.party-box .label { font-size: 8pt; font-weight: 700; color: #888; text-transform: uppercase;
+                    letter-spacing: 1px; margin-bottom: 4px; }
+.party-box .name { font-size: 11pt; font-weight: 700; color: #1a1a1a; }
+.party-box p { font-size: 9pt; color: #444; line-height: 1.5; margin-top: 2px; }
+
+/* Riferimenti */
+.refs { background: #f4f6f9; padding: 8px 12px; border-radius: 3px; margin-bottom: 16px;
+        font-size: 9.5pt; display: flex; gap: 24px; flex-wrap: wrap; }
+.refs span { color: #555; }
+.refs strong { color: #1a1a1a; }
+
+/* Tabella dati */
+table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+thead tr { background: #1a3a5c; color: white; }
+thead th { padding: 8px 10px; text-align: left; font-size: 9.5pt; font-weight: 600; }
+tbody tr:nth-child(even) { background: #f8f9fb; }
+tbody tr:hover { background: #eef1f6; }
+tbody td { padding: 7px 10px; font-size: 10pt; border-bottom: 1px solid #e8e8e8; vertical-align: middle; }
+.td-code { font-family: monospace; font-size: 9.5pt; font-weight: 600; color: #1a3a5c; }
+.td-num { text-align: right; }
+.td-total { text-align: right; font-weight: 600; }
+
+/* Totali */
+.totals { margin-left: auto; width: 280px; border-top: 2px solid #1a3a5c; margin-top: 8px; }
+.totals tr td { padding: 5px 10px; font-size: 10pt; }
+.totals tr:last-child td { font-weight: 700; font-size: 12pt; color: #1a3a5c;
+                            border-top: 1px solid #ccc; padding-top: 8px; }
+
+/* Note */
+.notes { margin-top: 16px; padding: 10px 12px; border-left: 3px solid #1a3a5c;
+         background: #f9fafb; font-size: 9.5pt; color: #444; }
+.notes strong { color: #1a3a5c; }
+
+/* Footer */
+.footer { margin-top: 32px; display: flex; justify-content: space-between;
+          align-items: flex-end; border-top: 1px solid #ccc; padding-top: 16px; }
+.footer-info { font-size: 8.5pt; color: #666; line-height: 1.6; }
+.stamp { width: 80px; height: 80px; border: 3px solid #1a3a5c; border-radius: 50%;
+         display: flex; align-items: center; justify-content: center; text-align: center;
+         color: #1a3a5c; font-size: 7pt; font-weight: 700; text-transform: uppercase;
+         line-height: 1.3; padding: 8px; }
+.signature { text-align: center; font-size: 9pt; color: #555; }
+.signature-line { border-bottom: 1px solid #555; width: 120px; height: 30px; margin: 0 auto 4px; }
+
+@media print { @page { size: A4; margin: 0; } .page { padding: 15mm 16mm; } }
+
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="header">
+  <div class="company-info">
+    <h1>ACME FURNITURE S.R.L.</h1>
+    <p>Via dell'Artigianato 12/B · 36100 Vicenza (VI)<br>
+       P.IVA: IT03456789016 · C.F.: 03456789016<br>
+       Tel: 0444 123456 · info@acmefurniture.it · www.acmefurniture.it</p>
+  </div>
+  <div class="doc-box">
+    <div class="doc-type">Fattura Proforma</div>
+    <div class="doc-number">N. FP-2026-0118</div>
+    <div class="doc-date">Data: 01/04/2026</div>
+  </div>
+</div>
+
+<div class="parties">
+  <div class="party-box">
+    <div class="label">Cedente / Prestatore</div>
+    <div class="name">Acme Furniture S.r.l.</div>
+    <p>Via dell'Artigianato 12/B<br>36100 Vicenza (VI)<br>Italy</p>
+    <p style="margin-top:6px;font-size:8.5pt;">P.IVA: IT03456789016<br>
+       Reg. Imp. VI · REA: VI-123456</p>
+  </div>
+  <div class="party-box">
+    <div class="label">Cessionario / Committente</div>
+    <div class="name">Casa Bella Trading SRL</div>
+    <p>Via Garibaldi 88<br>20121 Milano (MI)<br>Italy</p>
+    <p style="margin-top:6px;font-size:8.5pt;">P.IVA: IT02341890157</p>
+  </div>
+</div>
+
+<div class="refs">
+  <span><strong>Rif. Listino:</strong> Listino Prezzi Marzo 2026</span>
+  <span><strong>Condizioni:</strong> Pagamento 30 gg d.f.m.</span>
+  <span><strong>Valuta:</strong> EUR</span>
+  <span><strong>Listino applicato:</strong> LP-2026-03</span>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Rif.</th>
+      <th>Descrizione Articolo</th>
+      <th class="td-num">Prezzo Listino €</th>
+      <th class="td-num">Sconto %</th>
+      <th class="td-num">Prezzo Netto €</th>
+      <th>Note</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td class="td-code">A-001</td>
+      <td>Tavolo pranzo 180cm</td>
+      <td class="td-num">450,00</td>
+      <td class="td-num"><strong>10%</strong></td>
+      <td class="td-total"><strong>405,00</strong></td>
+      <td>Sconto rimodulato</td>
+    </tr>
+    <tr>
+      <td class="td-code">A-002</td>
+      <td>Sedia ergonomica</td>
+      <td class="td-num">—</td>
+      <td class="td-num">0%</td>
+      <td class="td-total">189,00</td>
+      <td>Prezzo fisso</td>
+    </tr>
+    <tr>
+      <td class="td-code">A-003</td>
+      <td>Libreria modulare 5 ripiani</td>
+      <td class="td-num">320,00</td>
+      <td class="td-num"><strong>5%</strong></td>
+      <td class="td-total">304,00</td>
+      <td>Sconto aprile</td>
+    </tr>
+    <tr>
+      <td class="td-code">B-001</td>
+      <td>Lampada design</td>
+      <td class="td-num">95,00</td>
+      <td class="td-num">10%</td>
+      <td class="td-total">85,50</td>
+      <td></td>
+    </tr>
+    <tr>
+      <td class="td-code">B-002</td>
+      <td>Tappeto 200x300</td>
+      <td class="td-num">180,00</td>
+      <td class="td-num">0%</td>
+      <td class="td-total">180,00</td>
+      <td>Disponibile su ordine</td>
+    </tr>
+  </tbody>
+</table>
+
+<table class="totals">
+  <tr><td>Subtotale</td><td class="td-num">1.163,50 €</td></tr>
+  <tr><td>IVA 22%</td><td class="td-num">255,97 €</td></tr>
+  <tr><td>Totale</td><td class="td-num">1.419,47 €</td></tr>
+</table>
+
+<div class="notes">
+  <strong>Condizioni generali:</strong> Prezzi validi fino al 30/04/2026. Articolo A-001:
+  sconto promozionale rimodulato dal 15% al 10% per il mese di aprile — il prezzo netto
+  passa da €382,50 a €405,00. Articolo A-003: sconto aggiuntivo 5% per ordini mensili
+  superiori a €1.000. Articolo B-002: disponibile su ordinazione (lead time 15 giorni).
+</div>
+
+<div class="footer">
+  <div class="footer-info">
+    Acme Furniture S.r.l. · Cap. Soc. €50.000 i.v.<br>
+    Banca: Unicredit · IBAN: IT60 X054 2811 1010 0000 0123 456<br>
+    Documento non costituisce fattura fiscale ai sensi del DPR 633/72
+  </div>
+  <div class="signature">
+    <div class="signature-line"></div>
+    <span>Direttore Commerciale</span>
+  </div>
+  <div class="stamp">ACME<br>FURNITURE<br>SRL</div>
+</div>
+
+</div>
+</body>
+</html>

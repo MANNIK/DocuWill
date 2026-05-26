@@ -1,15 +1,82 @@
+import hashlib
 import io
 import json
 import os
 import re
 from openai import OpenAI
 import pandas as pd
+import redis as redis_lib
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Any
 
 router = APIRouter(prefix="/parse", tags=["CSV Parser"])
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# ─── Cache column mapping per fornitore ──────────────────────────────────────
+# Redis DB 2 (DB 0 = Celery broker, DB 1 = embedding cache in reconciliation.py)
+_struct_redis = None
+
+
+def _get_struct_redis():
+    global _struct_redis
+    if _struct_redis is None:
+        try:
+            url = os.environ.get(
+                "CELERY_BROKER_URL", "redis://redis:6379/0"
+            ).replace("/0", "/2")
+            r = redis_lib.from_url(url, socket_connect_timeout=1)
+            r.ping()
+            _struct_redis = r
+        except Exception:
+            pass  # Redis non disponibile → nessuna cache, prosegue normalmente
+    return _struct_redis
+
+
+def _headers_fingerprint(headers: list[str]) -> str:
+    normalized = sorted(h.strip().lower() for h in headers if h.strip())
+    return hashlib.md5("|".join(normalized).encode()).hexdigest()[:12]
+
+
+def _extract_supplier_hint(raw_rows: list[list]) -> str | None:
+    """Cerca supplier nelle prime 10 righe (senza GPT) per cache lookup pre-call."""
+    keywords = {"fornitore", "supplier", "vendor", "from", "mittente",
+                "azienda", "ragione sociale", "company"}
+    for row in raw_rows[:10]:
+        for i, cell in enumerate(row):
+            if str(cell).strip().lower().rstrip(":") in keywords and i + 1 < len(row):
+                val = str(row[i + 1]).strip()
+                if len(val) > 2:
+                    return val
+    return None
+
+
+_COL_MAP_TTL = 30 * 86400  # 30 giorni
+
+
+def _cache_col_map_get(supplier: str, headers: list[str]) -> dict | None:
+    r = _get_struct_redis()
+    if not r or not supplier:
+        return None
+    s_hash = hashlib.md5(supplier.lower().encode()).hexdigest()[:12]
+    key = f"col_map:{s_hash}:{_headers_fingerprint(headers)}"
+    try:
+        data = r.get(key)
+        return json.loads(data) if data else None
+    except Exception:
+        return None
+
+
+def _cache_col_map_set(supplier: str, headers: list[str], mapping: dict, doc_type: str):
+    r = _get_struct_redis()
+    if not r or not supplier:
+        return
+    s_hash = hashlib.md5(supplier.lower().encode()).hexdigest()[:12]
+    key = f"col_map:{s_hash}:{_headers_fingerprint(headers)}"
+    try:
+        r.setex(key, _COL_MAP_TTL, json.dumps({"column_mapping": mapping, "doc_type": doc_type}))
+    except Exception:
+        pass
 
 
 class ParsedRow(BaseModel):
@@ -367,7 +434,41 @@ async def parse_csv_excel(file: UploadFile = File(...)):
     # GPT vede solo le prime 50 righe per capire la struttura
     # ma extract_rows usa TUTTE le righe
     preview = rows_to_text(sheets, max_rows_per_sheet=50)
-    gpt_result = ask_claude_to_understand_structure(preview, filename)
+
+    # ─── Cache pre-GPT: salta la chiamata se stesso fornitore + stessi header ───
+    _pre_supplier = _extract_supplier_hint(all_rows)
+    _pre_cached = None
+    if _pre_supplier:
+        _candidate = max(
+            all_rows[:20],
+            key=lambda r: sum(1 for c in r if str(c).strip()),
+            default=[],
+        )
+        _pre_headers = [str(c).strip() for c in _candidate]
+        if _pre_headers:
+            _pre_cached = _cache_col_map_get(_pre_supplier, _pre_headers)
+
+    if _pre_cached:
+        gpt_result = {
+            "sections": [{
+                "section_name": "cache_hit",
+                "header_row_index": None,
+                "data_row_indices": None,
+                "column_mapping": _pre_cached["column_mapping"],
+                "metadata": {
+                    "supplier_name": _pre_supplier,
+                    "document_number": "",
+                    "document_date": "",
+                    "total_amount": None,
+                },
+                "doc_type": _pre_cached.get("doc_type", "unknown"),
+                "doc_type_confidence": 95,
+                "notes": "Struttura letta dalla cache Redis (stesso fornitore + stessi header).",
+            }],
+            "file_summary": {},
+        }
+    else:
+        gpt_result = ask_claude_to_understand_structure(preview, filename)
     sections = gpt_result["sections"]
     file_summary = gpt_result.get("file_summary", {})
 
@@ -406,6 +507,21 @@ async def parse_csv_excel(file: UploadFile = File(...)):
         header_cells = None
         if header_row_idx is not None and int(header_row_idx) < len(all_rows):
             header_cells = [str(c).strip() for c in all_rows[int(header_row_idx)]]
+
+        # ─── Cache post-GPT: salva il mapping per uso futuro ───
+        _section_meta = section.get("metadata", {})
+        _supplier_for_cache = (
+            _section_meta.get("supplier_name", "")
+            or _extract_supplier_hint(all_rows)
+            or ""
+        )
+        if header_cells and _supplier_for_cache and not _pre_cached:
+            _cache_col_map_set(
+                _supplier_for_cache,
+                header_cells,
+                column_mapping,
+                section.get("doc_type", "unknown"),
+            )
 
         rows = extract_rows(
             all_rows,
