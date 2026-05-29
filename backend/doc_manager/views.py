@@ -14,12 +14,14 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from .models import AppSettings, Discrepancy, Document, Reconciliation
 from .serializers import (
     AppSettingsSerializer,
+    DiscrepancyUpdateSerializer,
     DocumentListSerializer,
     DocumentSerializer,
     DocumentUploadSerializer,
     ReconciliationSerializer,
     ReconciliationUpdateSerializer,
 )
+from .utils import normalize_supplier, supplier_key
 from .tasks import process_document_task
 
 
@@ -69,7 +71,7 @@ class DocumentUploadView(APIView):
         )
 
         return Response(
-            DocumentSerializer(document).data,
+            DocumentSerializer(document, context={'request': request}).data,
             status=status.HTTP_202_ACCEPTED,
         )
 
@@ -93,13 +95,17 @@ class ImageUploadView(APIView):
         )
 
         file_content = file.read()
+        # Persist image so it can be served as a preview
+        from django.core.files.base import ContentFile
+        document.file.save(file.name, ContentFile(file_content), save=True)
+
         process_document_task.delay(
             document_id=document.id,
             file_content=list(file_content),
             filename=file.name,
         )
 
-        return Response(DocumentSerializer(document).data, status=status.HTTP_202_ACCEPTED)
+        return Response(DocumentSerializer(document, context={'request': request}).data, status=status.HTTP_202_ACCEPTED)
 
 
 class WhatsAppWebhookView(APIView):
@@ -290,6 +296,12 @@ class DashboardStatsView(APIView):
             .order_by('-count')[:10]
         )
 
+        recent_docs = DocumentListSerializer(
+            Document.objects.order_by('-created_at')[:10],
+            many=True,
+            context={'request': request},
+        ).data
+
         return Response({
             "pending": pending,
             "processed_today": processed_today,
@@ -298,6 +310,7 @@ class DashboardStatsView(APIView):
             "queue": queue,
             "ingestion_7d": ingestion_7d,
             "discrepancy_histogram": disc_histogram,
+            "recent_documents": recent_docs,
         })
 
 
@@ -313,15 +326,16 @@ class WhatsAppInboxView(generics.ListAPIView):
 
 
 class SuppliersListView(APIView):
-    """Lista fornitori con statistiche aggregate."""
+    """Lista fornitori con statistiche aggregate (raggruppati per canonical name)."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         from django.db.models import Max, Q
-        suppliers = (
+
+        rows = (
             Document.objects
-            .exclude(supplier_name='')
-            .values('supplier_name')
+            .exclude(supplier_canonical='')
+            .values('supplier_canonical')
             .annotate(
                 doc_count=Count('id'),
                 last_upload=Max('created_at'),
@@ -330,18 +344,27 @@ class SuppliersListView(APIView):
         )
 
         result = []
-        for s in suppliers:
-            name = s['supplier_name']
+        for row in rows:
+            canon = row['supplier_canonical']
+            # Display name: nome originale più recente associato al canonical
+            display_name = (
+                Document.objects.filter(supplier_canonical=canon)
+                .exclude(supplier_name='').order_by('-created_at')
+                .values_list('supplier_name', flat=True).first()
+            ) or canon
+
             recon_q = Reconciliation.objects.filter(
-                Q(doc1__supplier_name=name) | Q(doc2__supplier_name=name)
+                Q(doc1__supplier_canonical=canon) | Q(doc2__supplier_canonical=canon)
             )
             total_recon = recon_q.count()
             approved = recon_q.filter(status=Reconciliation.StatusChoices.APPROVED).count()
-            match_rate = round(approved / total_recon * 100) if total_recon else 0
+            avg_conf = recon_q.aggregate(avg=Avg('match_confidence'))['avg'] or 0
+            match_rate = round(approved / total_recon * 100) if total_recon else round(avg_conf)
             result.append({
-                "name": name,
-                "doc_count": s['doc_count'],
-                "last_upload": s['last_upload'],
+                "name": display_name,
+                "name_key": canon,
+                "doc_count": row['doc_count'],
+                "last_upload": row['last_upload'],
                 "match_rate": match_rate,
             })
 
@@ -354,17 +377,29 @@ class SupplierDetailView(APIView):
 
     def get(self, request, name):
         from django.db.models import Q
-        docs = Document.objects.filter(supplier_name=name)
+        from .utils import canonical_supplier_name
+
+        # Risolvi il canonical: cerca prima un doc con quel display name
+        canon = (
+            Document.objects.filter(supplier_name=name)
+            .values_list('supplier_canonical', flat=True).first()
+        ) or canonical_supplier_name(name)
+
+        docs = Document.objects.filter(supplier_canonical=canon)
         if not docs.exists():
-            return Response({"error": "Fornitore non trovato"}, status=404)
+            # Fallback: cerca per nome esatto (prima del backfill)
+            docs = Document.objects.filter(supplier_name__iexact=name)
+            if not docs.exists():
+                return Response({"error": "Fornitore non trovato"}, status=404)
 
         by_type = dict(docs.values('doc_type').annotate(c=Count('id')).values_list('doc_type', 'c'))
         recon_q = Reconciliation.objects.filter(
-            Q(doc1__supplier_name=name) | Q(doc2__supplier_name=name)
+            Q(doc1__supplier_canonical=canon) | Q(doc2__supplier_canonical=canon)
         )
         total_recon = recon_q.count()
         approved = recon_q.filter(status=Reconciliation.StatusChoices.APPROVED).count()
-        match_rate = round(approved / total_recon * 100) if total_recon else 0
+        avg_conf = recon_q.aggregate(avg=Avg('match_confidence'))['avg'] or 0
+        match_rate = round(approved / total_recon * 100) if total_recon else round(avg_conf)
 
         cached_mappings = []
         try:
@@ -372,7 +407,7 @@ class SupplierDetailView(APIView):
             broker_url = getattr(settings, 'CELERY_BROKER_URL', 'redis://redis:6379/0')
             cache_url = broker_url.rsplit('/', 1)[0] + '/2'
             r = redis_lib.from_url(cache_url, socket_connect_timeout=1)
-            name_hash = hashlib.md5(name.lower().encode()).hexdigest()[:12]
+            name_hash = hashlib.md5(supplier_key(canon).encode()).hexdigest()[:12]
             keys = r.keys(f'col_map:{name_hash}:*')
             for key in keys:
                 raw = r.get(key)
@@ -389,8 +424,9 @@ class SupplierDetailView(APIView):
         except Exception:
             pass
 
+        display_name = docs.order_by('-created_at').values_list('supplier_name', flat=True).first() or name
         return Response({
-            "name": name,
+            "name": display_name,
             "doc_count": docs.count(),
             "match_rate": match_rate,
             "docs_by_type": by_type,
@@ -432,3 +468,120 @@ class ClearCacheView(APIView):
             return Response({"deleted": deleted})
         except Exception as e:
             return Response({"error": str(e)}, status=500)
+
+
+class DiscrepancyUpdateView(generics.UpdateAPIView):
+    """L'operatore risolve una singola discrepanza."""
+    from .models import Discrepancy as _Disc
+    queryset = Discrepancy.objects.all()
+    serializer_class = DiscrepancyUpdateSerializer
+    permission_classes = [IsAuthenticated]
+    http_method_names = ["patch"]
+
+    def perform_update(self, serializer):
+        resolution = serializer.validated_data.get('resolution', '')
+        extra = {}
+        if resolution and resolution != Discrepancy.ResolutionChoices.UNRESOLVED:
+            extra['resolved_at'] = timezone.now()
+            extra['resolved_by'] = self.request.user
+        serializer.save(**extra)
+
+
+class NotificationsView(APIView):
+    """Notifiche per la topbar: riconciliazioni pending, errori, ecc."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        last_24h = timezone.now() - timezone.timedelta(hours=24)
+
+        pending_recons = Reconciliation.objects.filter(
+            status=Reconciliation.StatusChoices.PENDING
+        ).select_related('doc1', 'doc2').order_by('-created_at')[:20]
+
+        error_docs = Document.objects.filter(
+            status=Document.StatusChoices.ERROR,
+            updated_at__gte=last_24h,
+        ).order_by('-updated_at')[:10]
+
+        items = []
+        for r in pending_recons:
+            items.append({
+                "type": "recon_pending",
+                "message": f"Riconciliazione {r.doc1.supplier_name or r.doc1.original_filename} in attesa",
+                "link": f"/v2/reconciliations/{r.id}",
+                "created_at": r.created_at.isoformat(),
+            })
+        for d in error_docs:
+            items.append({
+                "type": "doc_error",
+                "message": f"Errore elaborazione: {d.original_filename or d.supplier_name}",
+                "link": f"/documents/{d.id}",
+                "created_at": d.updated_at.isoformat(),
+            })
+
+        errors_last_24h = Document.objects.filter(
+            status=Document.StatusChoices.ERROR,
+            updated_at__gte=last_24h,
+        ).count()
+
+        return Response({
+            "pending_reconciliations": Reconciliation.objects.filter(
+                status=Reconciliation.StatusChoices.PENDING
+            ).count(),
+            "pending_documents": Document.objects.filter(
+                status=Document.StatusChoices.PENDING
+            ).count(),
+            "errors_last_24h": errors_last_24h,
+            "items": items,
+        })
+
+
+class SearchView(APIView):
+    """Ricerca full-text su documenti per la command palette."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from django.db.models import Q
+        q = request.query_params.get('q', '').strip()
+        if len(q) < 2:
+            return Response([])
+        docs = Document.objects.filter(
+            Q(supplier_name__icontains=q) |
+            Q(supplier_canonical__icontains=q) |
+            Q(document_number__icontains=q) |
+            Q(original_filename__icontains=q)
+        ).order_by('-created_at')[:10]
+        return Response(DocumentListSerializer(
+            docs, many=True, context={'request': request}
+        ).data)
+
+
+class MeView(APIView):
+    """Profilo dell'utente corrente."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        u = request.user
+        return Response({
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "date_joined": u.date_joined.isoformat(),
+        })
+
+    def patch(self, request):
+        u = request.user
+        email = request.data.get('email')
+        password = request.data.get('password')
+        if email is not None:
+            u.email = email
+        if password:
+            if len(password) < 6:
+                return Response({"error": "password troppo corta (min 6 caratteri)"}, status=400)
+            u.set_password(password)
+        u.save()
+        return Response({
+            "id": u.id,
+            "username": u.username,
+            "email": u.email,
+        })

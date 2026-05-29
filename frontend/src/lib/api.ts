@@ -6,12 +6,39 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
+async function refreshAccessToken(): Promise<string | null> {
+  if (typeof window === 'undefined') return null
+  const refresh = localStorage.getItem('refresh_token')
+  if (!refresh) return null
+  try {
+    const res = await fetch(`${API}/api/auth/token/refresh/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh }),
+    })
+    if (!res.ok) return null
+    const data = await res.json()
+    localStorage.setItem('access_token', data.access)
+    return data.access
+  } catch {
+    return null
+  }
+}
+
 async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const res = await fetch(url, {
     ...options,
     headers: { ...authHeaders(), ...(options.headers as Record<string, string> ?? {}) },
   })
   if (res.status === 401 && typeof window !== 'undefined') {
+    const newToken = await refreshAccessToken()
+    if (newToken) {
+      const retry = await fetch(url, {
+        ...options,
+        headers: { 'Authorization': `Bearer ${newToken}`, ...(options.headers as Record<string, string> ?? {}) },
+      })
+      if (retry.status !== 401) return retry
+    }
     localStorage.removeItem('access_token')
     localStorage.removeItem('refresh_token')
     window.location.href = '/login'
@@ -58,6 +85,7 @@ export interface Document {
   total_amount: string | null
   error_message: string
   file_url: string | null
+  file: string | null
   extracted_data: ExtractedData
   rows: DocumentRow[]
   created_at: string
@@ -74,6 +102,12 @@ export interface Discrepancy {
   severity: 'info' | 'warning' | 'error'
   doc1_row: number | null
   doc2_row: number | null
+  resolution: 'unresolved' | 'keep_doc1' | 'keep_doc2' | 'equivalent' | 'custom' | 'ignored'
+  resolution_display: string
+  resolved_value: string
+  operator_note: string
+  llm_suggestion: string
+  resolved_at: string | null
 }
 
 export interface Reconciliation {
@@ -186,6 +220,28 @@ export interface DashboardStats {
   queue: Reconciliation[]
   ingestion_7d: { date: string; count: number }[]
   discrepancy_histogram: { discrepancy_type: string; count: number }[]
+  recent_documents: Document[]
+}
+
+export interface Notification {
+  type: 'recon_pending' | 'doc_error' | 'doc_processed'
+  message: string
+  link: string
+  created_at: string
+}
+
+export interface NotificationsData {
+  pending_reconciliations: number
+  pending_documents: number
+  errors_last_24h: number
+  items: Notification[]
+}
+
+export interface UserProfile {
+  id: number
+  username: string
+  email: string
+  date_joined: string
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {
@@ -231,5 +287,60 @@ export async function updateSettings(data: Partial<AppSettings>): Promise<AppSet
 export async function clearCache(): Promise<{ deleted: number }> {
   const res = await apiFetch(`${API}/api/settings/cache/`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Errore pulizia cache')
+  return res.json()
+}
+
+export async function updateDiscrepancy(
+  id: number,
+  payload: { resolution?: string; resolved_value?: string; operator_note?: string },
+): Promise<{ resolution: string; resolved_value: string; operator_note: string }> {
+  const res = await apiFetch(`${API}/api/discrepancies/${id}/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error('Errore aggiornamento discrepanza')
+  return res.json()
+}
+
+export async function getNotifications(): Promise<NotificationsData> {
+  const res = await apiFetch(`${API}/api/notifications/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore notifiche')
+  return res.json()
+}
+
+export async function searchAll(q: string): Promise<Document[]> {
+  const res = await apiFetch(`${API}/api/search/?q=${encodeURIComponent(q)}`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore ricerca')
+  return res.json()
+}
+
+export async function getMe(): Promise<UserProfile> {
+  const res = await apiFetch(`${API}/api/auth/me/`, { cache: 'no-store' })
+  if (!res.ok) throw new Error('Errore profilo')
+  return res.json()
+}
+
+export async function updateMe(payload: { email?: string; password?: string }): Promise<UserProfile> {
+  const res = await apiFetch(`${API}/api/auth/me/`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error('Errore aggiornamento profilo')
+  return res.json()
+}
+
+export async function simulateWhatsapp(payload: {
+  from: string
+  media_url: string
+  caption?: string
+}): Promise<{ status: string; document_id: number }> {
+  const res = await apiFetch(`${API}/api/webhook/whatsapp/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) throw new Error('Errore simulazione WhatsApp')
   return res.json()
 }

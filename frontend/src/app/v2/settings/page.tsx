@@ -2,9 +2,9 @@
 import { useState, useEffect } from 'react'
 import Card from '@/components/v2/Card'
 import Btn from '@/components/v2/Btn'
-import { getSettings, updateSettings, clearCache } from '@/lib/api'
+import { getSettings, updateSettings, clearCache, simulateWhatsapp } from '@/lib/api'
 import type { AppSettings } from '@/lib/api'
-import { Database, Check } from '@/components/v2/Icons'
+import { Database, Check, AlertCircle, Whatsapp } from '@/components/v2/Icons'
 
 const WEBHOOK_URL = `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'}/api/webhook/whatsapp/`
 
@@ -13,6 +13,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [cacheResult, setCacheResult] = useState<string | null>(null)
+  const [waModal, setWaModal] = useState(false)
+  const [waForm, setWaForm] = useState({ from: '+39123456789', media_url: '', caption: '' })
+  const [waResult, setWaResult] = useState<string | null>(null)
 
   useEffect(() => {
     getSettings().then(setSettings).catch(() => {})
@@ -32,6 +35,16 @@ export default function SettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch { /* noop */ } finally { setSaving(false) }
+  }
+
+  async function handleSimulateWa() {
+    try {
+      const res = await simulateWhatsapp(waForm)
+      setWaResult(`Documento #${res.document_id} in elaborazione…`)
+      setTimeout(() => { setWaResult(null); setWaModal(false) }, 3000)
+    } catch (e) {
+      setWaResult(e instanceof Error ? e.message : 'Errore')
+    }
   }
 
   async function handleClearCache() {
@@ -55,6 +68,15 @@ export default function SettingsPage() {
           <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>Connettore WhatsApp</div>
           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Sorgente messaggi in entrata per la coda OCR</div>
         </div>
+        {/* Banner informativo */}
+        <div style={{ margin: '14px 20px 0', padding: '10px 12px', background: 'var(--info-soft)', borderRadius: 'var(--radius-sm)', color: 'var(--info)', fontSize: 12, display: 'flex', gap: 8 }}>
+          <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <strong>In sviluppo solo la modalità Mock è attiva.</strong><br />
+            Usa <code style={{ background: 'rgba(0,0,0,0.08)', padding: '1px 4px', borderRadius: 3 }}>POST {WEBHOOK_URL}</code> per simulare un messaggio in arrivo.<br />
+            Per <strong>produzione</strong>: configura le variabili <code style={{ background: 'rgba(0,0,0,0.08)', padding: '1px 4px', borderRadius: 3 }}>TWILIO_ACCOUNT_SID</code> / <code style={{ background: 'rgba(0,0,0,0.08)', padding: '1px 4px', borderRadius: 3 }}>TWILIO_AUTH_TOKEN</code> nel backend, oppure integra Meta Cloud API con App ID e access token.
+          </div>
+        </div>
         <div className="q-settings-section" style={{ padding: '16px 20px' }}>
           {(['mock', 'twilio', 'meta'] as const).map(p => (
             <label key={p} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
@@ -68,12 +90,45 @@ export default function SettingsPage() {
                   {p === 'mock' ? 'Mock locale' : p === 'twilio' ? 'Twilio' : 'Meta API'}
                   {p !== 'mock' && <span className="q-pill" style={{ marginLeft: 8, fontSize: 10 }}>coming soon</span>}
                 </div>
-                {p === 'mock' && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Webhook URL: <span className="q-mono" style={{ fontSize: 11 }}>{WEBHOOK_URL}</span></div>}
+                {p === 'mock' && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Webhook URL: <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>{WEBHOOK_URL}</span></div>}
               </div>
             </label>
           ))}
         </div>
+        <div style={{ padding: '0 20px 16px' }}>
+          <Btn variant="ghost" size="sm" onClick={() => setWaModal(true)}>
+            <Whatsapp size={13} /> Simula messaggio WhatsApp
+          </Btn>
+        </div>
       </Card>
+
+      {/* Modale simulazione WA */}
+      {waModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(20,10,50,0.4)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setWaModal(false)}>
+          <div style={{ background: 'var(--surface)', borderRadius: 'var(--radius-lg)', padding: 24, width: 420, boxShadow: 'var(--shadow-lg)' }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 16 }}>Simula messaggio WhatsApp</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label className="q-label">Da (numero)</label>
+                <input className="q-input" value={waForm.from} onChange={e => setWaForm(f => ({ ...f, from: e.target.value }))} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <label className="q-label">URL immagine (pubblico)</label>
+                <input className="q-input" placeholder="https://..." value={waForm.media_url} onChange={e => setWaForm(f => ({ ...f, media_url: e.target.value }))} style={{ width: '100%' }} />
+              </div>
+              <div>
+                <label className="q-label">Caption (opzionale)</label>
+                <input className="q-input" value={waForm.caption} onChange={e => setWaForm(f => ({ ...f, caption: e.target.value }))} style={{ width: '100%' }} />
+              </div>
+            </div>
+            {waResult && <div style={{ marginTop: 10, padding: '8px 12px', background: 'var(--ok-soft)', borderRadius: 'var(--radius-sm)', color: 'var(--ok)', fontSize: 12 }}>{waResult}</div>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
+              <Btn variant="ghost" size="sm" onClick={() => setWaModal(false)}>Annulla</Btn>
+              <Btn variant="primary" size="sm" onClick={handleSimulateWa} disabled={!waForm.media_url}>Invia</Btn>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* OCR engine */}
       <Card>

@@ -48,6 +48,8 @@ class DocumentSerializer(serializers.ModelSerializer):
             "total_amount",
             "extracted_data",
             "error_message",
+            "file_url",
+            "file",
             "rows",
             "created_at",
             "updated_at",
@@ -71,6 +73,9 @@ class DiscrepancySerializer(serializers.ModelSerializer):
     discrepancy_type_display = serializers.CharField(
         source="get_discrepancy_type_display", read_only=True
     )
+    resolution_display = serializers.CharField(
+        source="get_resolution_display", read_only=True
+    )
 
     class Meta:
         model = Discrepancy
@@ -84,7 +89,19 @@ class DiscrepancySerializer(serializers.ModelSerializer):
             "severity",
             "doc1_row",
             "doc2_row",
+            "resolution",
+            "resolution_display",
+            "resolved_value",
+            "operator_note",
+            "llm_suggestion",
+            "resolved_at",
         ]
+
+
+class DiscrepancyUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Discrepancy
+        fields = ["resolution", "resolved_value", "operator_note"]
 
 
 class ReconciliationSerializer(serializers.ModelSerializer):
@@ -143,7 +160,7 @@ class DocumentListSerializer(serializers.ModelSerializer):
             "id", "source", "source_display", "doc_type", "doc_type_display",
             "status", "status_display", "original_filename", "supplier_name",
             "document_date", "document_number", "total_amount", "error_message",
-            "file_url", "created_at", "updated_at",
+            "file_url", "file", "created_at", "updated_at",
         ]
         extra_kwargs = {
             "source_display": {"source": "get_source_display", "read_only": True},

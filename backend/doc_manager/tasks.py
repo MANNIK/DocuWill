@@ -1,6 +1,7 @@
 import httpx
 from celery import shared_task
 from django.conf import settings
+from django.core.files.base import ContentFile
 
 
 @shared_task(bind=True, max_retries=3)
@@ -79,8 +80,15 @@ def process_document_task(
                 media_resp.raise_for_status()
                 media_bytes = media_resp.content
 
-            ext = media_url.split(".")[-1].split("?")[0] if "." in media_url else "jpg"
+            content_type = media_resp.headers.get('content-type', 'image/jpeg')
+            ext = content_type.split('/')[-1].split(';')[0]
+            if ext not in ('jpeg', 'jpg', 'png', 'webp'):
+                ext = media_url.split(".")[-1].split("?")[0] if "." in media_url else "jpg"
             fname = filename or f"whatsapp_{document.id}.{ext}"
+
+            # Salva i bytes su disco per renderli accessibili dal frontend
+            if not document.file:
+                document.file.save(fname, ContentFile(media_bytes), save=True)
 
             with httpx.Client(timeout=120) as client:
                 response = client.post(
@@ -110,9 +118,15 @@ def process_document_task(
 def _save_ocr_result(document, parsed: dict):
     """Salva il risultato OCR (da /ocr/image o /ocr/upload) su un Document."""
     from .models import Document, DocumentRow
+    from .utils import normalize_supplier, canonical_supplier_name
 
     document.doc_type = parsed.get("doc_type", Document.TypeChoices.UNKNOWN)
-    document.supplier_name = parsed.get("supplier_name", "")
+    document.supplier_name = normalize_supplier(parsed.get("supplier_name", ""))
+    existing = list(
+        Document.objects.exclude(pk=document.pk).exclude(supplier_canonical='')
+        .values_list('supplier_canonical', flat=True).distinct()
+    )
+    document.supplier_canonical = canonical_supplier_name(document.supplier_name, existing)
     document.document_number = parsed.get("document_number", "")
     document.total_amount = parsed.get("total_amount")
     document.extracted_data = {"raw_text": parsed.get("raw_text", "")}
@@ -150,9 +164,15 @@ def _update_document(document, parsed: dict):
     documento che per le sezioni aggiuntive.
     """
     from .models import Document, DocumentRow
+    from .utils import normalize_supplier, canonical_supplier_name
 
     document.doc_type = parsed.get("doc_type", Document.TypeChoices.UNKNOWN)
-    document.supplier_name = parsed.get("supplier_name", "")
+    document.supplier_name = normalize_supplier(parsed.get("supplier_name", ""))
+    existing = list(
+        Document.objects.exclude(pk=document.pk).exclude(supplier_canonical='')
+        .values_list('supplier_canonical', flat=True).distinct()
+    )
+    document.supplier_canonical = canonical_supplier_name(document.supplier_name, existing)
     document.document_number = parsed.get("document_number", "")
     document.total_amount = parsed.get("total_amount")
     document.extracted_data = parsed.get("raw_extracted", {})

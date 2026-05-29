@@ -2,8 +2,9 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState, useEffect } from 'react'
-import { Home, Upload, Whatsapp, Diff, Suppliers, Settings, ChevronDown } from './Icons'
+import { Home, Upload, Whatsapp, Diff, Suppliers, Settings } from './Icons'
 import { getDocuments, getReconciliations } from '@/lib/api'
+import UserMenu from './UserMenu'
 
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
@@ -89,14 +90,7 @@ export default function Sidebar() {
         })}
       </nav>
 
-      <div className="q-sidebar-footer">
-        <div className="q-avatar">{username ? initials(username) : '?'}</div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text)' }}>{username || 'Operatore'}</div>
-          <div style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Ufficio acquisti</div>
-        </div>
-        <ChevronDown size={14} />
-      </div>
+      <UserMenu />
     </aside>
   )
 }

@@ -1,10 +1,11 @@
 'use client'
 import { useState, useEffect } from 'react'
-import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import Card from '@/components/v2/Card'
 import Pill, { statusToPillVariant } from '@/components/v2/Pill'
 import EmptyState from '@/components/v2/EmptyState'
 import Btn from '@/components/v2/Btn'
+import ImagePreview from '@/components/v2/ImagePreview'
 import { Whatsapp, Camera, Check, ArrowRight } from '@/components/v2/Icons'
 import { getWhatsAppInbox } from '@/lib/api'
 import type { Document } from '@/lib/api'
@@ -28,6 +29,7 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<Document[]>([])
   const [selected, setSelected] = useState<Document | null>(null)
   const [loading, setLoading] = useState(true)
+  const router = useRouter()
 
   useEffect(() => {
     getWhatsAppInbox().then(m => { setMessages(m); setLoading(false) }).catch(() => setLoading(false))
@@ -91,33 +93,18 @@ export default function InboxPage() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
-                <Link href={`/documents/${selected.id}`}><Btn variant="ghost" size="sm">Dettaglio completo</Btn></Link>
-                <Link href="/v2/reconciliations"><Btn variant="primary" size="sm"><ArrowRight size={12} /> Riconciliazioni</Btn></Link>
+                <Btn variant="ghost" size="sm" onClick={() => router.push(`/documents/${selected.id}`)}>Dettaglio completo</Btn>
+                <Btn variant="primary" size="sm" onClick={() => router.push('/v2/reconciliations')}><ArrowRight size={12} /> Riconciliazioni</Btn>
               </div>
             </div>
 
-            {/* Foto placeholder */}
+            {/* Foto documento */}
             <Card>
               <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>
                 Documento ricevuto
               </div>
-              <div className="q-photo" style={{ height: 200, position: 'relative' }}>
-                <div style={{
-                  background: 'white', padding: 20, borderRadius: 8, maxWidth: 260, width: '80%',
-                  transform: 'rotate(-0.6deg)', boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-                  border: '1px solid #e0d8f0',
-                }}>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: '#555', marginBottom: 8 }}>
-                    {selected.supplier_name || 'FORNITORE'}
-                  </div>
-                  <div style={{ fontSize: 10, color: '#888', marginBottom: 12 }}>
-                    {selected.document_number ? `N. ${selected.document_number}` : 'Documento'} · {selected.document_date || '—'}
-                  </div>
-                  <div style={{ height: 1, background: '#eee', margin: '8px 0' }} />
-                  <div style={{ fontSize: 10, color: '#aaa', marginTop: 8, textAlign: 'center', fontFamily: 'cursive' }}>
-                    {selected.source === 'whatsapp' ? '📱 Ricevuto via WhatsApp' : '📷 Caricato localmente'}
-                  </div>
-                </div>
+              <div style={{ padding: 16 }}>
+                <ImagePreview document={selected} />
               </div>
             </Card>
 

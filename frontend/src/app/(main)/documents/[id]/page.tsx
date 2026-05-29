@@ -219,11 +219,11 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
           )}
 
           {/* Dati logistici aggregati */}
-          {doc.extracted_data?.file_summary && Object.keys(doc.extracted_data.file_summary).length > 0 && (
+          {Boolean(doc.extracted_data?.file_summary) && Object.keys(doc.extracted_data.file_summary as Record<string, unknown>).length > 0 && (
             <div>
               <p className="text-xs text-gray-500 mb-2">Dati logistici aggregati del file</p>
               <div className="grid grid-cols-3 gap-2">
-                {Object.entries(doc.extracted_data.file_summary).map(([k, v]) => (
+                {Object.entries(doc.extracted_data.file_summary as Record<string, unknown>).map(([k, v]) => (
                   <div key={k} className="bg-gray-50 rounded px-3 py-2">
                     <p className="text-xs text-gray-400">{k}</p>
                     <p className="text-sm font-medium text-gray-800 tabular-nums">{String(v)}</p>
@@ -235,7 +235,7 @@ export default function DocumentDetail({ params }: { params: Promise<{ id: strin
 
           {/* Testo grezzo OCR — solo per documenti da foto (WhatsApp o upload immagine) */}
           {(doc.source === 'whatsapp' || doc.source === 'image') &&
-           doc.extracted_data?.raw_text && (
+           Boolean(doc.extracted_data?.raw_text) && (
             <details className="group">
               <summary className="cursor-pointer text-xs font-medium text-gray-500 hover:text-gray-700 flex items-center gap-1.5 select-none">
                 <span className="group-open:rotate-90 transition-transform inline-block">▶</span>

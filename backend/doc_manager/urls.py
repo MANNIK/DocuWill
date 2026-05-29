@@ -29,4 +29,8 @@ urlpatterns = [
     path("suppliers/<str:name>/", views.SupplierDetailView.as_view(), name="supplier-detail"),
     path("settings/", views.SettingsView.as_view(), name="settings"),
     path("settings/cache/", views.ClearCacheView.as_view(), name="settings-cache"),
+    path("discrepancies/<int:pk>/", views.DiscrepancyUpdateView.as_view(), name="discrepancy-update"),
+    path("notifications/", views.NotificationsView.as_view(), name="notifications"),
+    path("search/", views.SearchView.as_view(), name="search"),
+    path("auth/me/", views.MeView.as_view(), name="me"),
 ]

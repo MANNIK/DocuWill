@@ -125,7 +125,7 @@ export default function SuppliersPage() {
                         <td><span className="q-pill">{m.doc_type}</span></td>
                         <td>
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                            {Object.entries(m.mapping).filter(([, v]) => v !== 'ignore').map(([col, field]) => (
+                            {Object.entries(m.mapping).filter(([, v]) => v && v !== 'ignore').map(([col, field]) => (
                               <span key={col} className="q-pill accent" style={{ fontSize: 11 }}>
                                 {col} → {colMapLabels[field] ?? field}
                               </span>

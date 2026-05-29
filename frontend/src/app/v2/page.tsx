@@ -5,7 +5,7 @@ import KpiCard from '@/components/v2/KpiCard'
 import Card from '@/components/v2/Card'
 import Pill, { statusToPillVariant } from '@/components/v2/Pill'
 import { getDashboardStats } from '@/lib/api'
-import type { DashboardStats } from '@/lib/api'
+import type { DashboardStats, Document } from '@/lib/api'
 
 function fmtMs(ms: number) {
   if (ms < 1000) return `${ms}ms`
@@ -16,6 +16,8 @@ function fmtMs(ms: number) {
 function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })
 }
+
+const sourceIcon: Record<string, string> = { whatsapp: '📱', image: '📷', upload: '📄' }
 
 const discTypeLabel: Record<string, string> = {
   quantity_mismatch: 'Quantità', price_mismatch: 'Prezzo', missing_in_doc2: 'Mancante doc2',
@@ -50,7 +52,7 @@ export default function DashboardPage() {
     <div className="q-content q-fade-in">
       {/* Header */}
       <div>
-        <h1 className="q-display">Buongiorno 👋</h1>
+        <h1 className="q-display">Buongiorno</h1>
         <p className="q-subtitle">Ecco lo stato della coda di riconciliazione</p>
       </div>
 
@@ -137,6 +139,31 @@ export default function DashboardPage() {
             </div>
           </Card>
         </div>
+
+        {/* Documenti recenti — full-width inside the grid */}
+        {stats.recent_documents && stats.recent_documents.length > 0 && (
+          <Card style={{ overflow: 'hidden', gridColumn: '1 / -1' }}>
+            <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', fontWeight: 600, fontSize: 13 }}>Documenti recenti</div>
+            <table className="q-tbl">
+              <thead>
+                <tr>
+                  <th>Tipo</th><th>Fornitore</th><th>Status</th><th>Data</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stats.recent_documents.map((d: Document) => (
+                  <tr key={d.id} style={{ cursor: 'pointer' }}
+                    onClick={() => window.location.href = (d.source === 'whatsapp' || d.source === 'image') ? '/v2/inbox' : '/v2/reconciliations'}>
+                    <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{sourceIcon[d.source] ?? '📄'} {d.doc_type_display}</td>
+                    <td style={{ fontWeight: 500, fontSize: 12 }}>{d.supplier_name || '—'}</td>
+                    <td><Pill variant={d.status === 'processed' ? 'ok' : d.status === 'error' ? 'err' : 'warn'}>{d.status_display}</Pill></td>
+                    <td style={{ fontSize: 11, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{fmtDate(d.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        )}
       </div>
     </div>
   )

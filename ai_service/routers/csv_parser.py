@@ -4,6 +4,7 @@ import json
 import os
 import re
 from openai import OpenAI
+from utils.supplier import normalize_for_cache
 import pandas as pd
 import redis as redis_lib
 from fastapi import APIRouter, UploadFile, File, HTTPException
@@ -58,7 +59,7 @@ def _cache_col_map_get(supplier: str, headers: list[str]) -> dict | None:
     r = _get_struct_redis()
     if not r or not supplier:
         return None
-    s_hash = hashlib.md5(supplier.lower().encode()).hexdigest()[:12]
+    s_hash = hashlib.md5(normalize_for_cache(supplier).encode()).hexdigest()[:12]
     key = f"col_map:{s_hash}:{_headers_fingerprint(headers)}"
     try:
         data = r.get(key)
@@ -71,7 +72,7 @@ def _cache_col_map_set(supplier: str, headers: list[str], mapping: dict, doc_typ
     r = _get_struct_redis()
     if not r or not supplier:
         return
-    s_hash = hashlib.md5(supplier.lower().encode()).hexdigest()[:12]
+    s_hash = hashlib.md5(normalize_for_cache(supplier).encode()).hexdigest()[:12]
     key = f"col_map:{s_hash}:{_headers_fingerprint(headers)}"
     try:
         r.setex(key, _COL_MAP_TTL, json.dumps({"column_mapping": mapping, "doc_type": doc_type}))

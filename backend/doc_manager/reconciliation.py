@@ -759,6 +759,7 @@ def find_and_reconcile(new_doc: Document):
             value_doc1=str(d.get("value_doc1", "")),
             value_doc2=str(d.get("value_doc2", "")),
             severity=d.get("severity", "warning"),
+            llm_suggestion=d.get("note", ""),
         )
         for d in discrepancies
     ])

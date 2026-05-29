@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Card from '@/components/v2/Card'
 import Pill, { statusToPillVariant } from '@/components/v2/Pill'
@@ -19,6 +20,7 @@ const statusLabel: Record<string, string> = {
 export default function ReconciliationsPage() {
   const [recons, setRecons] = useState<Reconciliation[]>([])
   const [loading, setLoading] = useState(true)
+  const router = useRouter()
 
   useEffect(() => {
     getReconciliations().then(r => { setRecons(r); setLoading(false) }).catch(() => setLoading(false))
@@ -53,7 +55,14 @@ export default function ReconciliationsPage() {
             </thead>
             <tbody>
               {recons.map(r => (
-                <tr key={r.id} style={{ cursor: 'pointer' }}>
+                <tr
+                  key={r.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => router.push(`/v2/reconciliations/${r.id}`)}
+                  role="link"
+                  tabIndex={0}
+                  onKeyDown={e => e.key === 'Enter' && router.push(`/v2/reconciliations/${r.id}`)}
+                >
                   <td>
                     <div style={{ fontWeight: 500, fontSize: 12 }}>{r.doc1.doc_type_display}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>{r.doc1.document_number || '—'}</div>
@@ -81,9 +90,9 @@ export default function ReconciliationsPage() {
                   <td><Pill variant={statusToPillVariant(r.status)}>{statusLabel[r.status] ?? r.status}</Pill></td>
                   <td style={{ fontSize: 11, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{fmtDate(r.created_at)}</td>
                   <td>
-                    <Link href={`/v2/reconciliations/${r.id}`} style={{ textDecoration: 'none' }}>
-                      <button className="q-btn ghost sm"><ArrowRight size={13} /></button>
-                    </Link>
+                    <span className="q-btn ghost sm" style={{ display: 'inline-flex', alignItems: 'center' }}>
+                      <ArrowRight size={13} />
+                    </span>
                   </td>
                 </tr>
               ))}

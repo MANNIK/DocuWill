@@ -37,6 +37,8 @@ export const TrendingUp = icon('M23 6l-9.5 9.5-5-5L1 18|M17 6h6v6')
 export const Tag = icon('M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z|M7 7h.01')
 export const Hash = icon('M4 9h16|M4 15h16|M10 3L8 21|M16 3l-2 18')
 export const GitMerge = icon('M18 21a3 3 0 100-6 3 3 0 000 6z|M6 3a3 3 0 100 6 3 3 0 000-6z|M6 9v5c0 1.1.4 2.1 1.2 2.8l1.8 1.6|M18 15V9')
+export const User = icon('M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2|M12 11a4 4 0 100-8 4 4 0 000 8z')
+export const LogOut = icon('M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4|M16 17l5-5-5-5|M21 12H9')
 export const UploadCloud = icon('M16 16l-4-4-4 4|M12 12v9|M20.39 18.39A5 5 0 0018 9h-1.26A8 8 0 103 16.3')
 export const Loader = ({ size = 16, className, style }: IconProps) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className={`q-spin ${className ?? ''}`} style={style}>

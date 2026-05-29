@@ -1,4 +1,6 @@
+from django.conf import settings
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class AppSettings(models.Model):
@@ -60,13 +62,15 @@ class Document(models.Model):
 
     # File originale
     original_filename = models.CharField(max_length=255, blank=True)
-    file_url = models.URLField(blank=True)  # per le foto WhatsApp
+    file_url = models.URLField(blank=True)  # URL sorgente Twilio (per audit)
+    file = models.FileField(upload_to='whatsapp/%Y/%m/', blank=True, null=True)  # copia locale
 
     # Dati estratti (raw JSON da FastAPI)
     extracted_data = models.JSONField(default=dict, blank=True)
 
     # Metadati estratti
     supplier_name = models.CharField(max_length=255, blank=True)
+    supplier_canonical = models.CharField(max_length=255, blank=True, db_index=True)
     document_date = models.DateField(null=True, blank=True)
     document_number = models.CharField(max_length=100, blank=True)
     total_amount = models.DecimalField(
@@ -84,6 +88,7 @@ class Document(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [models.Index(Lower("supplier_name"), name="doc_supplier_lower_idx")]
 
 
 class DocumentRow(models.Model):
@@ -167,6 +172,14 @@ class Reconciliation(models.Model):
 class Discrepancy(models.Model):
     """Una singola discrepanza trovata durante la riconciliazione."""
 
+    class ResolutionChoices(models.TextChoices):
+        UNRESOLVED = "unresolved", "Non risolta"
+        KEEP_DOC1 = "keep_doc1", "Tieni doc1"
+        KEEP_DOC2 = "keep_doc2", "Tieni doc2"
+        EQUIVALENT = "equivalent", "Equivalente"
+        CUSTOM = "custom", "Valore custom"
+        IGNORED = "ignored", "Ignorata"
+
     class TypeChoices(models.TextChoices):
         MISSING_IN_DOC2 = "missing_in_doc2", "Riga mancante nel doc2"
         EXTRA_IN_DOC2 = "extra_in_doc2", "Riga extra nel doc2"
@@ -211,6 +224,24 @@ class Discrepancy(models.Model):
         max_length=10,
         choices=[("info", "Info"), ("warning", "Warning"), ("error", "Errore")],
         default="warning",
+    )
+
+    # Risoluzione operatore
+    resolution = models.CharField(
+        max_length=20,
+        choices=ResolutionChoices.choices,
+        default=ResolutionChoices.UNRESOLVED,
+    )
+    resolved_value = models.CharField(max_length=500, blank=True)
+    operator_note = models.TextField(blank=True)
+    llm_suggestion = models.TextField(blank=True)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="resolved_discrepancies",
     )
 
     def __str__(self):
