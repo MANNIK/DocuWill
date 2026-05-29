@@ -272,6 +272,9 @@ Regole sulle sezioni:
 - Escludi da data_row_indices: titoli, header, righe vuote, totali/riepiloghi
 - Se il file ha una sola tabella, restituisci sections con un solo elemento
 - Non sovrapporre data_row_indices tra sezioni diverse
+- Righe con "SOTTOTALE", "SUBTOTALE", "SUBTOTAL", "Parziale" o simili sono totali
+  parziali di una sezione continua — NON sono separatori di sezioni distinte.
+  Stessa logica per "TOTALE GENERALE", "Grand Total", "TOTALE FINALE"
 - Se vedi marcatori "--- SHEET N ---", ogni sheet è un foglio Excel separato
 - Se vedi "... [N righe omesse] ...", il file contiene più righe di quelle mostrate;
   le ultime righe visibili dopo il marcatore sono la coda reale del file — usale per
@@ -286,6 +289,7 @@ Regole sulle sezioni:
     message = client.chat.completions.create(
         model="gpt-4o",
         max_tokens=2048,
+        temperature=0,
         messages=[{"role": "user", "content": prompt}],
     )
 
