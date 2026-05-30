@@ -73,11 +73,12 @@ Built as a technical challenge for WeWill.
 
 | Layer | Technology | Why |
 |---|---|---|
-| Frontend | Next.js 16 + React 19 + TypeScript + Tailwind | Modern, typed, app router |
+| Frontend | Next.js 16 + React 19 + TypeScript | Modern, typed, app router — Quoro v2 design system |
 | Backend | Django 5.0 + DRF + django-environ | Solid ORM, admin, JWT auth |
 | AI microservice | FastAPI + uvicorn | Async, separate from Django, faster parsing |
 | Task queue | Celery 5.4 + Redis 7 | Async processing — OCR/parsing can take 10-30s |
 | LLM | OpenAI GPT-4o | Vision + structured JSON output, multilingual |
+| Supplier fuzzy match | rapidfuzz | Canonical grouping across name variants (AB, SRL, GmbH, etc.) |
 | Embeddings | OpenAI text-embedding-3-small | Supplier name matching, section similarity |
 | Database | PostgreSQL 16 | Reliable, JSONB for raw_data |
 | Containers | Docker + Docker Compose | One-command setup |
@@ -142,7 +143,19 @@ docker compose run --rm backend python manage.py createsuperuser
 
 ### 4. Login
 
-Go to `http://localhost:3000/login` and use the superuser credentials.
+Go to `http://localhost:3000` (redirects to the Quoro v2 UI) and use the superuser credentials.
+
+### 5. Run tests (optional)
+
+```bash
+# Unit tests
+docker compose exec backend pytest -v
+docker compose exec ai_service pytest -v
+
+# E2E runner (requires fixture files in ~/Desktop/TEST PER QUORO/tests/)
+pip3 install -r scripts/requirements-test.txt
+python3 scripts/test_agent.py --reset --skip-ai --verbose
+```
 
 ---
 
@@ -236,30 +249,55 @@ POST /api/dev/reset/               Delete all data (development only)
 
 ## What Works
 
+### UI (Quoro v2)
+- **Full operator UI** built with a custom CSS design system ("Quoro") — no Tailwind, pure CSS variables
+- Dashboard with live KPI cards (documents pending, reconciliations approved, discrepancies this week)
+- Bulk upload with independent `UploadJob` queue — each file has its own progress bar, step indicator, and error banner
+- Reconciliation list with status pills; detail page with DocCard pair (side-by-side) + DiscrepancyRail (color-coded by severity)
+- Supplier canonical grouping page — shows all name variants resolved to one canonical key
+- Inbox page for incoming WhatsApp documents
+- Command palette (Cmd+K), notifications dropdown, user profile + logout
+- WhatsApp image preview with modal
+
+### Parsing
 - CSV/Excel parsing with any layout, any language, any supplier (tested on 9 diverse files)
 - Multi-section files (multiple suppliers/documents in one file)
 - Multi-sheet Excel
 - European number formats (1.234,56), dirty data, offset headers
 - OCR from photos via GPT-4o Vision
-- WhatsApp integration with Twilio (real signature verification, authenticated media download)
-- Adaptive reconciliation handling both standard (order/invoice) and non-standard (tariffs, zone pricing) documents
+- Per-supplier column mapping cache in Redis (DB 2) — `(supplier_canonical, headers_fingerprint)` key; TTL 30 days; skips GPT re-analysis for known suppliers
+
+### Reconciliation
+- Adaptive cascade: L1 math comparison → L2 GPT-4o semantic → L3 decision
+- Both standard (order/invoice/DDT) and non-standard (tariffs, zone pricing) document pairs
 - Fuzzy item code matching (FRN-001 ↔ FRN001) via SequenceMatcher
 - Embedding-based description matching for multilingual item names
-- Auto-approval when no real errors found
-- Full operator review UI (side-by-side documents, color-coded discrepancies, approve/reject/correct)
+- Auto-approval when no real errors found after L2
+
+### Supplier matching
+- `canonical_supplier_name()` in `backend/doc_manager/utils.py` with rapidfuzz (threshold 80%) + suffix stripping (AB, SRL, GmbH & Co. KG, S.p.A., Ltd, Inc, ...)
+- Same normalization logic mirrored in `ai_service/utils/supplier.py` — both services compute the same Redis cache key
+
+### WhatsApp
+- Twilio integration with real signature verification and authenticated media download
+- Mock mode (send JSON to `/api/webhook/whatsapp/`) for testing without a phone
+
+### Tests
+- **116 unit tests**: 63 backend (utils/reconciliation/tasks/views), 53 ai_service (csv_parser/ocr/supplier)
+- E2E black-box runner `scripts/test_agent.py` — uploads all fixture files, validates extracted doc counts and reconciliation pairs
 - Section-aware matching prevents cross-zone tariff reconciliation errors
 
 ## What's Missing / Known Limitations
 
 - **OCR accuracy on dense tables**: when multiple quantity columns exist (COLLI, QTÀ/COLLO, QTÀ TOTALE), GPT-4o Vision occasionally reads the wrong column on low-quality photos. High-resolution images work reliably.
-- **No automated tests**: zero test coverage. Would add pytest-django + factory_boy for models and httpx mock for FastAPI integration tests.
 - **Tariff multi-dimensional tables**: weight range tariffs (Zona A/B/C, multiple service levels) don't map cleanly to the 7 standard fields. The system stores everything in `raw_data` and uses L2 full semantic, which works but loses the normalized representation.
-- **No per-supplier column mapping cache**: if the same supplier sends files with consistent headers, GPT re-analyzes every time. Caching the `column_mapping` after first parse would save tokens.
+- **No WebSocket push**: L3 marks pending reconciliations but doesn't notify the operator in real time. The UI polls on page load.
 - **ngrok URL changes on restart**: free ngrok account generates a new URL each session. Updating Twilio Console webhook URL is a manual step.
 
 ## What I'd Refactor
 
-- **Embed cache in Redis per vector DB**: currently embeddings are cached in Redis as JSON blobs. For scale, a proper vector store (pgvector, Pinecone) would enable semantic search across all historical documents.
-- **Streaming reconciliation results**: the current flow is fire-and-forget via Celery. WebSocket push would let the operator see reconciliation results as they arrive without polling.
+- **Vector store for embeddings**: currently embedding vectors are cached in Redis as JSON. For scale, pgvector or Pinecone would enable semantic search across all historical documents.
+- **WebSocket push for reconciliation events**: the current flow is fire-and-forget via Celery; results appear only on next page load. A WebSocket channel would push updates as they arrive.
 - **LLM provider abstraction**: the system is tightly coupled to OpenAI. An adapter layer would allow switching to Anthropic Claude or Google Gemini with a config change.
-- **Confidence-based retry**: if `doc_type_confidence < 50`, retry parsing with a larger preview window. Currently confidence is stored but not acted on.
+- **Confidence-based retry**: if `doc_type_confidence < 50`, retry parsing with a larger preview window (currently stored but not acted on).
+- **Frontend test coverage**: no Jest or Playwright tests; UI correctness is verified only by manual smoke testing.
