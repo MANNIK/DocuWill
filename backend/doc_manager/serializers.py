@@ -154,20 +154,19 @@ class AppSettingsSerializer(serializers.ModelSerializer):
 
 class DocumentListSerializer(serializers.ModelSerializer):
     """Versione leggera di DocumentSerializer per liste (senza rows)."""
+    source_display = serializers.CharField(source="get_source_display", read_only=True)
+    doc_type_display = serializers.CharField(source="get_doc_type_display", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    row_count = serializers.SerializerMethodField()
+
+    def get_row_count(self, obj):
+        return obj.rows.count()
+
     class Meta:
         model = Document
         fields = [
             "id", "source", "source_display", "doc_type", "doc_type_display",
             "status", "status_display", "original_filename", "supplier_name",
             "document_date", "document_number", "total_amount", "error_message",
-            "file_url", "file", "created_at", "updated_at",
+            "file_url", "file", "row_count", "created_at", "updated_at",
         ]
-        extra_kwargs = {
-            "source_display": {"source": "get_source_display", "read_only": True},
-            "doc_type_display": {"source": "get_doc_type_display", "read_only": True},
-            "status_display": {"source": "get_status_display", "read_only": True},
-        }
-
-    source_display = serializers.CharField(source="get_source_display", read_only=True)
-    doc_type_display = serializers.CharField(source="get_doc_type_display", read_only=True)
-    status_display = serializers.CharField(source="get_status_display", read_only=True)

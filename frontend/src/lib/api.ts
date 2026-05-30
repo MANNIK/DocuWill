@@ -88,6 +88,7 @@ export interface Document {
   file: string | null
   extracted_data: ExtractedData
   rows: DocumentRow[]
+  row_count?: number
   created_at: string
   updated_at: string
 }

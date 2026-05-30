@@ -118,7 +118,7 @@ export default function InboxPage() {
                   ['Data', selected.document_date || '—'],
                   ['Tipo', selected.doc_type_display],
                   ['Totale', selected.total_amount ? `€${parseFloat(selected.total_amount).toLocaleString('it-IT')}` : '—'],
-                  ['Righe estratte', String(selected.rows?.length ?? 0)],
+                  ['Righe estratte', String(selected.row_count ?? selected.rows?.length ?? 0)],
                 ].map(([k, v]) => (
                   <div key={k}>
                     <div style={{ fontSize: 11, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 2 }}>{k}</div>

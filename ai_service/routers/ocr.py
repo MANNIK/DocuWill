@@ -47,7 +47,7 @@ Rispondi SOLO con JSON valido, nessun testo prima o dopo:
       "item_code": "codice",
       "description": "descrizione",
       "quantity": numero o null,
-      "unit": "pz|kg|l|m|ecc",
+      "unit": "pz|kg|l|m|spedizione|ecc",
       "unit_price": numero o null,
       "total_price": numero o null,
       "discount": numero o null
@@ -56,20 +56,29 @@ Rispondi SOLO con JSON valido, nessun testo prima o dopo:
   "raw_text": "tutto il testo estratto"
 }
 
-Regole importanti:
-- quantity: nei DDT e packing list ci sono spesso più colonne numeriche per riga.
-  Usa SEMPRE la colonna della quantità TOTALE dell'articolo (QTÀ TOTALE, Total Qty,
-  Pezzi Totali, Quantità Totale).
-  Ignora come quantity: COLLI (numero di colli/scatole), QTÀ/COLLO (pezzi per collo),
-  Qty per Box, Boxes — sono dati logistici del trasporto, non la quantità ordinata.
-  Regola pratica: se vedi colonne COLLI + QTÀ/COLLO + QTÀ TOTALE, usa solo QTÀ TOTALE.
-- item_code: usa il codice articolo/prodotto (SKU, Cod. Art.), non numeri di riga
-  o riferimenti ordine se esiste già una colonna codice articolo separata."""
+Regole per documenti standard (ordini, fatture, DDT, packing list):
+- quantity: usa SEMPRE la colonna della quantità TOTALE (QTÀ TOTALE, Total Qty, Pezzi Totali).
+  Ignora COLLI, QTÀ/COLLO, Qty per Box — sono dati logistici, non la quantità ordinata.
+  Regola pratica: se vedi COLLI + QTÀ/COLLO + QTÀ TOTALE, usa solo QTÀ TOTALE.
+- item_code: usa SKU/Cod. Art., non numeri di riga o riferimenti ordine.
+
+Regole per tariffari e listini prezzi (doc_type: price_list):
+- Se il documento è una tabella tariffaria a matrice (es. fasce di peso × zone/servizi),
+  espandi ogni combinazione fascia-servizio in una riga separata.
+  Esempio: tariffario con ZONA A, ZONA B e fasce 0-1kg, 1-3kg → genera una riga per ogni cella.
+- item_code: codice compatto della combinazione, es. "ZONA-A-0.5-1.0" o "STD-1-3".
+- description: descrizione leggibile, es. "Standard Conv. — Zona A, 0.5÷1.0 kg".
+- unit_price: il prezzo negoziato/scontato (colonna "Conv.", "Clienti", "Scontato") se presente,
+  altrimenti il prezzo base.
+- unit: "spedizione" per tariffe a collo/spedizione, "kg" per tariffe al kg.
+- quantity: null (le tariffe non hanno quantità).
+- discount: percentuale di sconto applicata, se indicata esplicitamente (es. –8%).
+- Estrai TUTTE le righe della matrice — non fermarti alla prima zona o alla prima fascia."""
 
     try:
         message = client.chat.completions.create(
             model="gpt-4o",
-            max_tokens=4096,
+            max_tokens=8192,
             messages=[
                 {
                     "role": "user",
