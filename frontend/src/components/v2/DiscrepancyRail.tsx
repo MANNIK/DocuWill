@@ -29,6 +29,7 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
   const [showCustom, setShowCustom] = useState(false)
   const [showNote, setShowNote] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const filtered = discrepancies
     .filter(d => filter === 'all' || d.severity === filter)
@@ -42,19 +43,22 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
 
   async function resolve(id: number, payload: { resolution?: string; resolved_value?: string; operator_note?: string }) {
     setLoading(true)
+    setActionError(null)
     try {
       await updateDiscrepancy(id, payload)
       onDiscrepancyUpdate(id, payload as Partial<Discrepancy>)
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Errore nel salvataggio. Riprova.')
     } finally {
       setLoading(false)
     }
   }
 
-  function handleAction(resolution: string, resolvedValue?: string) {
+  async function handleAction(resolution: string, resolvedValue?: string) {
     if (!selected) return
-    resolve(selected.id, { resolution, resolved_value: resolvedValue ?? '' })
     setShowCustom(false)
     setShowNote(false)
+    await resolve(selected.id, { resolution, resolved_value: resolvedValue ?? '' })
   }
 
   function handleCustomSubmit() {
@@ -122,9 +126,19 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
         ))}
       </div>
 
+      {/* Dettaglio + Note — area scrollabile che occupa lo spazio rimanente */}
+      <div className="q-rail-detail-area">
+
       {/* Pannello dettaglio discrepanza selezionata */}
       {selected && (
         <div className="q-disc-detail">
+
+          {/* Banner errore azione */}
+          {actionError && (
+            <div style={{ padding: '8px 10px', background: 'var(--err-soft)', color: 'var(--err)', borderRadius: 'var(--radius-sm)', fontSize: 12 }}>
+              {actionError}
+            </div>
+          )}
 
           {/* Sezione header: tipo + campo + stato */}
           <div className="q-disc-detail-header">
@@ -157,6 +171,9 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
           </div>
 
           {/* Azioni primarie: accetta uno dei due valori */}
+          {loading && (
+            <div style={{ fontSize: 11, color: 'var(--text-faint)', textAlign: 'center' }}>Salvataggio…</div>
+          )}
           <div className="q-disc-primary-actions">
             <button
               className={`q-disc-primary-btn ${selected.resolution === 'keep_doc1' ? 'active' : ''}`}
@@ -265,6 +282,8 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
           Salva nota
         </button>
       </div>
+
+      </div>{/* /q-rail-detail-area */}
     </div>
   )
 }

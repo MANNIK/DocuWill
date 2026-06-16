@@ -163,7 +163,7 @@ export default function ReconciliationHeroPage() {
   const scoreColor = recon.match_confidence >= 70 ? 'var(--ok)' : recon.match_confidence >= 40 ? 'var(--warn)' : 'var(--err)'
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {/* Sticky header */}
       <div style={{
         padding: '14px 24px',
@@ -220,27 +220,32 @@ export default function ReconciliationHeroPage() {
 
       {/* Body: 2-col grid + rail */}
       <div className="q-recon-v2" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        {/* Left: doc cards + diff table — scorre indipendentemente */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, overflowY: 'auto', padding: '20px 24px' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <DocCard
-              doc={recon.doc1}
-              label="Documento 1"
-              discrepancies={discrepancies}
-              side="doc1"
-            />
-            <DocCard
-              doc={recon.doc2}
-              label="Documento 2"
-              discrepancies={discrepancies}
-              side="doc2"
-            />
-          </div>
+        {/* Left: doc cards + diff table — scorre indipendentemente.
+            Il wrapper esterno (block + overflow-y:auto) è il scroll container.
+            Il div interno (flex column) può crescere oltre i limiti del wrapper
+            e far apparire la scrollbar, senza che flex-shrink schiacci il contenuto. */}
+        <div style={{ overflowY: 'auto', minWidth: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '20px 24px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <DocCard
+                doc={recon.doc1}
+                label="Documento 1"
+                discrepancies={discrepancies}
+                side="doc1"
+              />
+              <DocCard
+                doc={recon.doc2}
+                label="Documento 2"
+                discrepancies={discrepancies}
+                side="doc2"
+              />
+            </div>
 
-          {/* Diff table */}
-          {(recon.doc1.rows?.length || recon.doc2.rows?.length) ? (
-            <DiffTable recon={recon} discrepancies={discrepancies} />
-          ) : null}
+            {/* Diff table */}
+            {(recon.doc1.rows?.length || recon.doc2.rows?.length) ? (
+              <DiffTable recon={recon} discrepancies={discrepancies} />
+            ) : null}
+          </div>
         </div>
 
         {/* Right: discrepancy rail */}

@@ -284,11 +284,15 @@ table.q-diff tr.hl-info td { background-color: var(--info-soft) !important; }
 .q-rows-toggle { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: none; padding: 4px 0; display: flex; align-items: center; gap: 4px; }
 .q-rows-toggle:hover { text-decoration: underline; }
 
-/* Rail v2 */
-.q-rail-v2 { border-left: 1px solid var(--border); overflow-y: auto; display: flex; flex-direction: column; }
-.q-rail-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-elev); z-index: 1; }
-.q-rail-list { overflow-y: auto; }
-.q-rail-notes { padding: 14px 16px; border-top: 1px solid var(--border); margin-top: auto; }
+/* Rail v2 — master-detail layout:
+   header (fixed) → list (capped + scrollable) → detail+notes (flex 1, scrollable) */
+.q-rail-v2 { border-left: 1px solid var(--border); overflow: hidden; display: flex; flex-direction: column; }
+.q-rail-header { flex-shrink: 0; padding: 14px 16px 10px; border-bottom: 1px solid var(--border); background: var(--bg-elev); z-index: 1; }
+/* lista: non si schiaccia a zero, altezza massima 38% del rail, scorribile */
+.q-rail-list { flex: 0 0 auto; max-height: 38%; min-height: 60px; overflow-y: auto; border-bottom: 1px solid var(--border); }
+/* area dettaglio+note: occupa lo spazio rimanente, scorribile */
+.q-rail-detail-area { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.q-rail-notes { flex-shrink: 0; padding: 14px 16px; border-top: 1px solid var(--border); }
 
 /* Lista voci */
 .q-disc-item { width: 100%; text-align: left; padding: 10px 16px; border: none; border-bottom: 1px solid var(--border); cursor: pointer; background: transparent; color: var(--text); transition: background 100ms; display: flex; align-items: center; gap: 8px; }
