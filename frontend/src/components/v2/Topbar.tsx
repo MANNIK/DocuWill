@@ -1,10 +1,12 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import { usePathname } from 'next/navigation'
-import { Home, Search, Bell } from './Icons'
+import Link from 'next/link'
+import { Home, Search, Bell, UploadCloud } from './Icons'
 import CommandPalette from './CommandPalette'
 import NotificationsDropdown from './NotificationsDropdown'
 import { getNotifications } from '@/lib/api'
+import { useUploadJobs } from '@/lib/upload-context'
 import type { NotificationsData } from '@/lib/api'
 
 const breadcrumbMap: Record<string, [string, string]> = {
@@ -53,6 +55,9 @@ export default function Topbar() {
     return () => document.removeEventListener('keydown', onKey)
   }, [])
 
+  const { jobs } = useUploadJobs()
+  const activeUploads = jobs.filter(j => j.steps.some(s => s.status === 'active')).length
+
   const hasErrors = (notifData?.errors_last_24h ?? 0) > 0
   const hasPending = (notifData?.items.length ?? 0) > 0
 
@@ -65,6 +70,14 @@ export default function Topbar() {
           <strong>{page}</strong>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {activeUploads > 0 && (
+            <Link href="/v2/upload" style={{ textDecoration: 'none' }}>
+              <span className="q-upload-badge">
+                <UploadCloud size={12} className="q-upload-badge-spin" />
+                {activeUploads} in corso
+              </span>
+            </Link>
+          )}
           <button className="q-btn ghost sm" onClick={() => setPaletteOpen(true)}>
             <Search size={14} /> Cerca <span className="q-kbd">⌘K</span>
           </button>

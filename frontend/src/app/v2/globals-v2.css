@@ -70,6 +70,9 @@
 .q-sidebar { background: var(--bg-elev); border-right: 1px solid var(--border); padding: 18px 12px; display: flex; flex-direction: column; gap: 18px; height: 100vh; overflow: auto; }
 .q-main { display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
 .q-topbar { display: flex; align-items: center; justify-content: space-between; padding: 14px 28px; border-bottom: 1px solid var(--border); background: var(--bg); position: sticky; top: 0; z-index: 5; flex-shrink: 0; }
+.q-upload-badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 500; background: var(--accent-soft); color: var(--accent-ink); cursor: pointer; }
+@keyframes q-spin { to { transform: rotate(360deg); } }
+.q-upload-badge-spin { animation: q-spin 1.2s linear infinite; }
 .q-content { padding: 28px; flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 22px; }
 .q-content.tight { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 
