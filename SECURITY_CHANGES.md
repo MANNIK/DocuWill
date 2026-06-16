@@ -337,6 +337,40 @@ Un filtro regex blocca pattern noti ("ignore previous instructions") ma non vari
 
 ---
 
+## 23. Correzione throttle globale — endpoint di polling esclusi
+
+**Data:** 2026-06-16  
+**File:** `backend/config/settings/base.py`
+
+### Problema riscontrato
+Il `DEFAULT_THROTTLE_CLASSES` con `AnonRateThrottle` (20 req/ora) si applicava a **tutti** gli endpoint DRF, incluse le read API di polling:
+- `GET /api/dashboard/stats/` — polling ogni 5s dalla dashboard
+- `GET /api/notifications/` — polling ogni 10s dalla Topbar
+- `GET /api/reconciliations/` — polling ogni 5s dalla pagina riconciliazioni
+- `GET /api/documents/` — polling dalla pagina documenti
+
+Con un solo utente attivo su più tab questi endpoint generano ~1800 req/ora. Il limite di 20/ora veniva esaurito in meno di un minuto, producendo 429 continui e rendendo l'app inutilizzabile.
+
+### Causa
+Tutti gli endpoint usano `AllowAny` (nessun JWT obbligatorio in questa fase), quindi ogni richiesta era classificata come "anonima" e conteggiata nello stesso bucket `anon`. Non c'era distinzione tra richieste di polling di lettura (zero costo) e upload che innescano GPT-4o (costo elevato).
+
+### Fix applicato
+`DEFAULT_THROTTLE_CLASSES` impostato a `[]` — nessun throttle globale.
+
+Il throttling rimane attivo **solo** sugli endpoint che lo richiedono, applicato view-per-view con classi scoped:
+
+| View | Throttle | Limite | Motivazione |
+|------|----------|--------|-------------|
+| `DocumentUploadView` | `UploadBurstThrottle` | 10/min | Ogni upload → chiamata GPT-4o |
+| `ImageUploadView` | `UploadBurstThrottle` | 10/min | Ogni upload → chiamata GPT-4o Vision |
+| `RegisterView` | `RegisterThrottle` | 5/ora | Anti mass-account |
+| `WhatsAppWebhookView` | `WebhookThrottle` | 60/min | Anti-abuso webhook pubblico |
+
+Le rate API di `THROTTLE_UPLOAD_BURST`, `THROTTLE_REGISTER`, `THROTTLE_WEBHOOK` rimangono configurabili da env.  
+I rate `THROTTLE_ANON` e `THROTTLE_USER` sono stati rimossi dal config (non più necessari).
+
+---
+
 ## Nota: credenziali da ruotare
 
 Le variabili `OPENAI_API_KEY` e `TWILIO_AUTH_TOKEN` in `.env.backend` sono live e gitignorate.
