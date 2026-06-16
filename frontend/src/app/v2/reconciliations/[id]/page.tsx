@@ -219,9 +219,9 @@ export default function ReconciliationHeroPage() {
       )}
 
       {/* Body: 2-col grid + rail */}
-      <div className="q-recon-v2" style={{ flex: 1, minHeight: 0, padding: '20px 24px', overflowY: 'auto' }}>
-        {/* Left: doc cards + diff table */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
+      <div className="q-recon-v2" style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {/* Left: doc cards + diff table — scorre indipendentemente */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0, overflowY: 'auto', padding: '20px 24px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             <DocCard
               doc={recon.doc1}
