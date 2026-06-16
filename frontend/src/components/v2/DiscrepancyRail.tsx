@@ -73,7 +73,7 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
 
   return (
     <div className="q-rail-v2">
-      {/* Header */}
+      {/* Header fisso */}
       <div className="q-rail-header">
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
           <span style={{ fontWeight: 600, fontSize: 13 }}>Discrepanze ({total})</span>
@@ -83,7 +83,11 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
         </div>
         <div className="q-chips">
           {(['all', 'error', 'warning', 'info'] as Filter[]).map(f => (
-            <button key={f} className={`q-chip ${f !== 'all' ? f : ''} ${filter === f ? 'active' : ''}`} onClick={() => setFilter(f)}>
+            <button
+              key={f}
+              className={`q-chip ${f !== 'all' ? f : ''} ${filter === f ? 'active' : ''}`}
+              onClick={() => setFilter(f)}
+            >
               {f === 'all' ? 'Tutti' : f === 'error' ? 'Errori' : f === 'warning' ? 'Warning' : 'Info'}
             </button>
           ))}
@@ -118,11 +122,20 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
         ))}
       </div>
 
-      {/* Dettaglio discrepanza selezionata */}
+      {/* Pannello dettaglio discrepanza selezionata */}
       {selected && (
         <div className="q-disc-detail">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <div style={{ fontSize: 12, fontWeight: 600 }}>{selected.discrepancy_type_display}</div>
+
+          {/* Sezione header: tipo + campo + stato */}
+          <div className="q-disc-detail-header">
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text)' }}>
+                {selected.discrepancy_type_display}
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
+                Campo: <span style={{ fontFamily: 'var(--font-mono)' }}>{selected.field_name}</span>
+              </div>
+            </div>
             {selected.resolution !== 'unresolved' ? (
               <span className="q-resolved-badge done">✓ {selected.resolution_display}</span>
             ) : (
@@ -130,47 +143,65 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
             )}
           </div>
 
-          {/* Confronto valori */}
-          <div className="q-disc-values">
-            <div className={`q-disc-val ${selected.resolution === 'keep_doc1' ? 'chosen' : ''}`}>
-              doc1: {selected.value_doc1 || '—'}
+          {/* Confronto valori — due colonne chiare */}
+          <div className="q-disc-compare">
+            <div className={`q-disc-compare-side ${selected.resolution === 'keep_doc1' ? 'chosen' : ''}`}>
+              <div className="q-disc-compare-label">Documento 1</div>
+              <div className="q-disc-compare-val">{selected.value_doc1 || '—'}</div>
             </div>
-            <span style={{ color: 'var(--text-faint)', fontSize: 12 }}>→</span>
-            <div className={`q-disc-val ${selected.resolution === 'keep_doc2' ? 'chosen' : ''}`}>
-              doc2: {selected.value_doc2 || '—'}
+            <div className="q-disc-compare-sep">≠</div>
+            <div className={`q-disc-compare-side ${selected.resolution === 'keep_doc2' ? 'chosen' : ''}`}>
+              <div className="q-disc-compare-label">Documento 2</div>
+              <div className="q-disc-compare-val">{selected.value_doc2 || '—'}</div>
             </div>
           </div>
 
-          {/* Azioni */}
-          <div className="q-disc-actions">
+          {/* Azioni primarie: accetta uno dei due valori */}
+          <div className="q-disc-primary-actions">
             <button
-              className={`q-disc-action-btn ${selected.resolution === 'keep_doc1' ? 'active' : ''}`}
+              className={`q-disc-primary-btn ${selected.resolution === 'keep_doc1' ? 'active' : ''}`}
               onClick={() => handleAction('keep_doc1', selected.value_doc1)}
               disabled={loading}
-            >Tieni doc1</button>
+            >
+              Accetta doc1
+            </button>
             <button
-              className={`q-disc-action-btn ${selected.resolution === 'keep_doc2' ? 'active' : ''}`}
+              className={`q-disc-primary-btn ${selected.resolution === 'keep_doc2' ? 'active' : ''}`}
               onClick={() => handleAction('keep_doc2', selected.value_doc2)}
               disabled={loading}
-            >Tieni doc2</button>
+            >
+              Accetta doc2
+            </button>
+          </div>
+
+          {/* Azioni secondarie */}
+          <div className="q-disc-secondary-actions">
             <button
               className={`q-disc-action-btn ${selected.resolution === 'equivalent' ? 'active' : ''}`}
               onClick={() => handleAction('equivalent')}
               disabled={loading}
-            >Marca equiv.</button>
+            >
+              Marca equiv.
+            </button>
             <button
               className={`q-disc-action-btn ${selected.resolution === 'ignored' ? 'active' : ''}`}
               onClick={() => handleAction('ignored')}
               disabled={loading}
-            >Ignora riga</button>
+            >
+              Ignora
+            </button>
             <button
               className={`q-disc-action-btn ${showCustom ? 'active' : ''}`}
               onClick={() => { setShowCustom(v => !v); setShowNote(false) }}
-            >Valore custom…</button>
+            >
+              Valore custom…
+            </button>
             <button
-              className={`q-disc-action-btn`}
+              className="q-disc-action-btn"
               onClick={() => { setShowNote(v => !v); setShowCustom(false) }}
-            >+ Nota</button>
+            >
+              + Nota
+            </button>
           </div>
 
           {showCustom && (
@@ -210,23 +241,18 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
           )}
 
           {/* Suggerimento LLM */}
-          {selected.llm_suggestion ? (
-            <div className="q-llm-box">
-              <div className="q-llm-label">💡 Suggerimento LLM</div>
-              {selected.llm_suggestion}
-            </div>
-          ) : (
-            <div className="q-llm-box" style={{ opacity: 0.5 }}>
-              <div className="q-llm-label">💡 Suggerimento LLM</div>
-              Nessun suggerimento disponibile
-            </div>
-          )}
+          <div className={`q-llm-box ${!selected.llm_suggestion ? 'q-llm-box--empty' : ''}`}>
+            <div className="q-llm-label">💡 Suggerimento AI</div>
+            {selected.llm_suggestion || 'Nessun suggerimento disponibile'}
+          </div>
         </div>
       )}
 
       {/* Note generali riconciliazione */}
-      <div style={{ padding: '14px 16px', borderTop: '1px solid var(--border)', marginTop: 'auto' }}>
-        <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', marginBottom: 6 }}>Note generali</div>
+      <div className="q-rail-notes">
+        <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-muted)', marginBottom: 6 }}>
+          Note generali
+        </div>
         <textarea
           className="q-textarea"
           placeholder="Note per questa riconciliazione…"
@@ -235,7 +261,9 @@ export default function DiscrepancyRail({ discrepancies, operatorNotes, onNotesC
           rows={3}
           style={{ fontSize: 12 }}
         />
-        <button className="q-btn ghost sm" style={{ marginTop: 6 }} onClick={onSaveNotes}>Salva nota</button>
+        <button className="q-btn ghost sm" style={{ marginTop: 6 }} onClick={onSaveNotes}>
+          Salva nota
+        </button>
       </div>
     </div>
   )

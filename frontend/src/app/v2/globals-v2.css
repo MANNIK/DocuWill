@@ -284,22 +284,50 @@ table.q-diff tr.hl-info td { background-color: var(--info-soft) !important; }
 /* Rail v2 */
 .q-rail-v2 { border-left: 1px solid var(--border); overflow-y: auto; display: flex; flex-direction: column; }
 .q-rail-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-elev); z-index: 1; }
-.q-rail-list { flex: 1; overflow-y: auto; }
+.q-rail-list { overflow-y: auto; }
+.q-rail-notes { padding: 14px 16px; border-top: 1px solid var(--border); margin-top: auto; }
+
+/* Lista voci */
 .q-disc-item { width: 100%; text-align: left; padding: 10px 16px; border: none; border-bottom: 1px solid var(--border); cursor: pointer; background: transparent; color: var(--text); transition: background 100ms; display: flex; align-items: center; gap: 8px; }
 .q-disc-item:hover { background: var(--bg-sunken); }
 .q-disc-item.selected { background: var(--accent-soft); color: var(--accent-ink); }
 .q-disc-item.resolved { opacity: 0.6; }
-.q-disc-detail { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; background: var(--surface); }
-.q-disc-values { display: flex; gap: 8px; align-items: center; font-size: 12.5px; }
-.q-disc-val { padding: 4px 10px; background: var(--bg-sunken); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 12px; }
-.q-disc-val.chosen { background: var(--ok-soft); color: var(--ok); font-weight: 600; }
-.q-disc-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.q-disc-action-btn { padding: 7px 10px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 12px; cursor: pointer; transition: all 100ms; text-align: center; }
-.q-disc-action-btn:hover { background: var(--bg-sunken); color: var(--text); }
+
+/* Pannello dettaglio */
+.q-disc-detail { padding: 16px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 12px; background: var(--bg-elev); border-top: 2px solid var(--accent-soft); }
+.q-disc-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+
+/* Confronto valori — due colonne */
+.q-disc-compare { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; }
+.q-disc-compare-side { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; background: var(--bg-sunken); border-radius: var(--radius-sm); border: 2px solid transparent; transition: border-color 120ms, background 120ms; }
+.q-disc-compare-side.chosen { border-color: var(--ok); background: var(--ok-soft); }
+.q-disc-compare-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); }
+.q-disc-compare-side.chosen .q-disc-compare-label { color: var(--ok); opacity: 0.8; }
+.q-disc-compare-val { font-family: var(--font-mono); font-size: 16px; font-weight: 700; color: var(--text); line-height: 1.2; word-break: break-all; }
+.q-disc-compare-side.chosen .q-disc-compare-val { color: var(--ok); }
+.q-disc-compare-sep { font-size: 18px; font-weight: 700; color: var(--err); text-align: center; user-select: none; }
+
+/* Azioni primarie (accetta doc1/doc2) */
+.q-disc-primary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.q-disc-primary-btn { padding: 9px 8px; border-radius: var(--radius-sm); border: 1.5px solid var(--border-strong); background: var(--surface); color: var(--text); font-size: 12px; font-weight: 500; cursor: pointer; transition: all 100ms; text-align: center; }
+.q-disc-primary-btn:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-soft); }
+.q-disc-primary-btn.active { background: var(--ok); color: white; border-color: var(--ok); }
+.q-disc-primary-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Azioni secondarie (equiv, ignora, custom, nota) */
+.q-disc-secondary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.q-disc-action-btn { padding: 7px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface); color: var(--text-muted); font-size: 11.5px; cursor: pointer; transition: all 100ms; text-align: center; }
+.q-disc-action-btn:hover:not(:disabled) { background: var(--bg-sunken); color: var(--text); }
 .q-disc-action-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+.q-disc-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* LLM suggestion */
 .q-llm-box { padding: 10px 12px; background: var(--info-soft); border-radius: var(--radius-sm); font-size: 12px; color: var(--info); line-height: 1.5; }
-.q-llm-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; opacity: 0.8; }
-.q-resolved-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; }
+.q-llm-box--empty { opacity: 0.5; }
+.q-llm-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; opacity: 0.8; }
+
+/* Badge stato */
+.q-resolved-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; white-space: nowrap; flex-shrink: 0; }
 .q-resolved-badge.done { background: var(--ok-soft); color: var(--ok); }
 .q-resolved-badge.pending { background: var(--bg-sunken); color: var(--text-faint); }
 
