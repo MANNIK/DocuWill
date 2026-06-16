@@ -84,15 +84,14 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
-    # Rate limiting — protegge il budget LLM da spam di documenti.
-    # Lo state dei throttle vive nel CACHES Redis (condiviso tra processi).
-    "DEFAULT_THROTTLE_CLASSES": (
-        "rest_framework.throttling.AnonRateThrottle",
-        "rest_framework.throttling.UserRateThrottle",
-    ),
+    # Nessun throttle globale: le view di polling (dashboard, notifications,
+    # reconciliations) non hanno costo LLM e vengono chiamate ogni 5-10s.
+    # Il throttling è applicato solo view-per-view con classi scoped:
+    #   UploadBurstThrottle  → DocumentUploadView, ImageUploadView
+    #   RegisterThrottle     → RegisterView
+    #   WebhookThrottle      → WhatsAppWebhookView
+    "DEFAULT_THROTTLE_CLASSES": [],
     "DEFAULT_THROTTLE_RATES": {
-        "anon": env("THROTTLE_ANON", default="20/hour"),
-        "user": env("THROTTLE_USER", default="1000/day"),
         "upload_burst": env("THROTTLE_UPLOAD_BURST", default="10/min"),
         "register": env("THROTTLE_REGISTER", default="5/hour"),
         "webhook": env("THROTTLE_WEBHOOK", default="60/min"),
