@@ -38,9 +38,11 @@ Contesto business: challenge tecnica per entrare in WeWill (startup italiana). V
 wewill-challenge/
 ├── docker-compose.yml
 ├── .env.backend          ← variabili Django/Celery/DB/OpenAI
+├── .env.ai               ← variabili ai_service (minimale, gitignored)
 ├── .env.frontend         ← variabili Next.js
 ├── .gitignore
 ├── CLAUDE.md
+├── SECURITY_CHANGES.md   ← changelog dettagliato di tutte le modifiche di sicurezza
 │
 ├── backend/              ← Django
 │   ├── Dockerfile
@@ -59,6 +61,8 @@ wewill-challenge/
 │       ├── serializers.py
 │       ├── tasks.py      ← Celery task principale
 │       ├── reconciliation.py ← logica riconciliazione a cascata
+│       ├── throttling.py ← classi throttle scoped (UploadBurst, Register, Webhook)
+│       ├── utils.py      ← is_safe_external_url() (anti-SSRF)
 │       ├── urls.py
 │       └── admin.py
 │
@@ -66,6 +70,7 @@ wewill-challenge/
 │   ├── Dockerfile
 │   ├── requirements.txt
 │   ├── main.py
+│   ├── deps.py           ← dependency require_internal_token (header X-Internal-Token)
 │   └── routers/
 │       ├── __init__.py
 │       ├── csv_parser.py ← parsing CSV/Excel con GPT-4o
@@ -167,10 +172,27 @@ GPT vede solo le prime 50 righe per capire la struttura. Il `data_row_indices` r
 
 Riconciliazione testata con 04+07: trovata discrepanza quantità su ALP-843 (ordinati 4, consegnati 6).
 
+**Sicurezza (implementata 2026-06-16)**
+- Rate limiting scoped: `UploadBurstThrottle` (10/min), `RegisterThrottle` (5/ora), `WebhookThrottle` (60/min) — nessun throttle globale (romperebbe il polling della UI)
+- Quota giornaliera per utente (default 200 documenti/giorno) via `AppSettings.daily_document_quota`
+- Anti-SSRF: `is_safe_external_url()` in `utils.py` risolve il DNS e rifiuta tutti gli IP privati/loopback/link-local incluso `169.254.169.254`; `follow_redirects=False` nel fetch Twilio
+- Autenticazione interna backend↔ai_service via header `X-Internal-Token` (dep `require_internal_token` in `deps.py`); porta 8001 rimossa dall'host Docker
+- JWT hardening: `ACCESS_TOKEN_LIFETIME=15min`, `ROTATE_REFRESH_TOKENS=True`, blacklist al logout; endpoint `POST /api/auth/logout/`
+- Validazione upload: estensione + dimensione (max 10 MB) nel serializer; magic bytes MIME per le immagini nel router OCR
+- Cap `MAX_SECTIONS=20` in csv_parser (evita amplificazione LLM con file ostili)
+- Cap `MAX_RECON_CANDIDATES=25` in reconciliation + prefiltro per `supplier_canonical` (O(N) LLM → O(1) ammortizzato)
+- Prompt injection guard in tutti e 3 i router AI: blocco esplicito nel prompt, campo `injection_detected` nella risposta GPT → HTTP 422 se rilevato
+- CORS da env (`CORS_ALLOWED_ORIGINS`), prima era `CORS_ALLOW_ALL_ORIGINS=True`
+- Security headers HTTP (HSTS, X-Frame-Options, NOSNIFF) attivi solo in produzione (`not DEBUG`)
+- `error_message` generico verso il client; stack trace solo nei log server
+- Cache Redis DB 3 condivisa tra processi per i contatori throttle
+- `.env.ai` minimale per ai_service (non vede `DJANGO_SECRET_KEY`, `DATABASE_URL`, `TWILIO_*`)
+- `conftest.py` nei test: `cache.clear()` prima di ogni test, throttle rates altissimi per i test
+
 ### 🔴 Non ancora iniziato
 
 - **Frontend Next.js** — pagina ancora quella di default, zero UI implementata
-- **Autenticazione** — `AllowAny` su tutti gli endpoint, JWT non configurato
+- **Autenticazione JWT obbligatoria** — `AllowAny` su tutti gli endpoint, JWT configurato ma non enforced
 - **WhatsApp integration** — solo mock endpoint, nessuna integrazione reale (Twilio o Meta API)
 - **WebSocket/notifiche** — L3 segna pending ma non notifica l'operatore
 - **Test automatici** — zero test scritti
@@ -249,12 +271,21 @@ Se `doc_type_confidence < 50`, ritentare con più righe di preview (60 invece di
 ### Naming
 - App Django: `doc_manager` (non `documents` — conflitto con modulo Python)
 - Settings: `config.settings.local` per dev, mai `config.settings` direttamente
-- File env: `.env.backend` per Django/Celery/DB, `.env.frontend` per Next.js
+- File env: `.env.backend` per Django/Celery/DB, `.env.frontend` per Next.js, `.env.ai` per ai_service (minimale)
 
 ### Pattern Django
 - Tutte le view usano `permission_classes = [AllowAny]` temporaneamente — da sostituire con JWT prima della consegna
 - I task Celery importano i modelli dentro la funzione (non a livello modulo) per evitare problemi di circular import
 - `_update_document()` è una funzione helper in `tasks.py` per evitare duplicazione di codice tra primo documento e sezioni aggiuntive
+- Il throttle va applicato **view-per-view** con classi scoped, mai globalmente in `DEFAULT_THROTTLE_CLASSES` — gli endpoint di polling della UI (dashboard/stats, notifications, documents, reconciliations) generano ~1800 req/ora e verrebbero bloccati in meno di un minuto
+- Ogni chiamata `httpx` verso ai_service deve includere `headers=_ai_headers()` (token interno)
+- Validare `media_url` con `is_safe_external_url()` prima di qualsiasi fetch da URL esterno; usare `follow_redirects=False`
+
+### Pattern sicurezza
+- Aggiungere un blocco prompt injection guard **prima** del contenuto del documento in tutti i prompt GPT che ricevono testo utente
+- Controllare `injection_detected` nella risposta GPT; se `True` → log server-side + HTTP 422 al client con messaggio generico
+- Non esporre stack trace al client: `error_message` generico nel modello, `logger.exception()` per i dettagli
+- Le image upload devono essere validate con magic bytes (non solo estensione dichiarata dall'utente)
 
 ### Pattern FastAPI
 - Il parser CSV NON usa pandas per la lettura iniziale — splitta manualmente per riga per non perdere righe "malformate" che sono titoli di sezione
@@ -266,7 +297,11 @@ Se `doc_type_confidence < 50`, ritentare con più righe di preview (60 invece di
 - Non usare `COMPLEMENTARY_TYPES` dict hardcoded per decidere quali tipi matchare — usare `are_documents_complementary()` con GPT
 - Non mandare tutto il documento a GPT nel livello 2 della riconciliazione — solo le righe coinvolte nelle discrepanze
 - Non usare `pandas.read_csv()` con `header=None` per file multi-sezione — usa split manuale
-- Non commitare `.env.backend` o `.env.frontend` — sono in `.gitignore`
+- Non commitare `.env.backend`, `.env.frontend` o `.env.ai` — sono in `.gitignore`
+- Non aggiungere throttle a `DEFAULT_THROTTLE_CLASSES` — rompe il polling della UI (vedi sezione sicurezza in Stato attuale)
+- Non usare `follow_redirects=True` per fetch di URL forniti dall'utente — bypass SSRF
+- Non mandare a GPT URL o path di sistema come parte del contesto documento — vettore di prompt injection
+- Non esporre `str(exc)` come `error_message` nel modello — usa messaggio generico e logga con `logger.exception()`
 
 ---
 
@@ -351,7 +386,18 @@ CELERY_BROKER_URL=redis://redis:6379/0
 CELERY_RESULT_BACKEND=redis://redis:6379/0
 OPENAI_API_KEY=sk-...
 AI_SERVICE_URL=http://ai_service:8001
+AI_SERVICE_TOKEN=<token condiviso con .env.ai, generare con secrets.token_hex(32)>
+WHATSAPP_DEV_MODE=1
+CORS_ALLOWED_ORIGINS=http://localhost:3000
 ```
+
+### Variabili d'ambiente richieste (`.env.ai`)
+```
+OPENAI_API_KEY=sk-...
+AI_SERVICE_TOKEN=<stesso token di .env.backend>
+CELERY_BROKER_URL=redis://redis:6379/0
+```
+`AI_SERVICE_TOKEN` va generato una volta sola (`python -c "import secrets; print(secrets.token_hex(32))"`) e copiato identico nei due file env. Se lasciato vuoto il token viene saltato (modalità dev senza autenticazione interna).
 
 ### Comando per avviare tutto
 ```bash
