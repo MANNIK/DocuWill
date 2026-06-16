@@ -1,19 +1,26 @@
 import base64
 import json
+import logging
 import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from deps import require_internal_token
-from openai import OpenAI
-from pydantic import BaseModel
+from openai import AsyncOpenAI
+from pydantic import BaseModel, field_validator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/ocr",
     tags=["OCR"],
     dependencies=[Depends(require_internal_token)],
 )
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Limite dimensione upload (default 10 MB). Applicato anche a livello Django,
+# ma l'ai_service non è direttamente esposto — doppia barriera per la rete interna.
+_MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE", 10 * 1024 * 1024))
 
 _MIME_MAP = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
@@ -42,6 +49,12 @@ class OCRRequest(BaseModel):
     caption: str = ""
 
 
+_VALID_DOC_TYPES = {
+    "invoice", "ddt", "order", "price_list", "packing_list",
+    "shipment", "confirmation", "summary", "inventory", "unknown",
+}
+
+
 class OCRResult(BaseModel):
     doc_type: str
     supplier_name: str = ""
@@ -52,6 +65,11 @@ class OCRResult(BaseModel):
     raw_text: str = ""
     injection_detected: bool = False
     injection_note: str = ""
+
+    @field_validator("doc_type")
+    @classmethod
+    def validate_doc_type(cls, v: str) -> str:
+        return v if v in _VALID_DOC_TYPES else "unknown"
 
 
 @router.post("/image", response_model=OCRResult)
@@ -116,9 +134,10 @@ Regole per tariffari e listini prezzi (doc_type: price_list):
 - Estrai TUTTE le righe della matrice — non fermarti alla prima zona o alla prima fascia."""
 
     try:
-        message = client.chat.completions.create(
+        message = await client.chat.completions.create(
             model="gpt-4o",
             max_tokens=8192,
+            timeout=90,
             messages=[
                 {
                     "role": "user",
@@ -146,8 +165,7 @@ Regole per tariffari e listini prezzi (doc_type: price_list):
         data = json.loads(raw)
 
         if data.get("injection_detected"):
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Prompt injection rilevato in documento OCR: %s",
                 data.get("injection_note", "nessun dettaglio"),
             )
@@ -158,18 +176,25 @@ Regole per tariffari e listini prezzi (doc_type: price_list):
 
         return OCRResult(**data)
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"JSON non valido: {e}")
+    except json.JSONDecodeError:
+        logger.exception("OCR: risposta LLM non è JSON valido")
+        raise HTTPException(status_code=502, detail="Errore nell'analisi del documento.")
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore OCR: {str(e)}")
+    except Exception:
+        logger.exception("OCR: errore imprevisto")
+        raise HTTPException(status_code=500, detail="Errore interno durante l'elaborazione.")
 
 
 @router.post("/upload", response_model=OCRResult)
 async def ocr_upload(file: UploadFile = File(...)):
     """Accetta un file immagine direttamente (jpg, png, webp) — simula il flusso WhatsApp senza URL pubblico."""
     content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File troppo grande. Limite: {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+        )
 
     # Validazione tipo file tramite magic bytes (indipendente dall'estensione dichiarata).
     detected_mime = _detect_image_mime(content)

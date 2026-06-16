@@ -26,3 +26,8 @@ class RegisterThrottle(AnonRateThrottle):
 class WebhookThrottle(AnonRateThrottle):
     """Limita le chiamate al webhook WhatsApp (per IP) — ogni media innesca OCR+LLM."""
     scope = "webhook"
+
+
+class LoginBurstThrottle(AnonRateThrottle):
+    """Limita i tentativi di login per IP — anti brute-force / credential stuffing."""
+    scope = "login"

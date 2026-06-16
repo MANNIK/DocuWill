@@ -9,12 +9,22 @@ docker-compose.yml). Questo token è la barriera applicativa aggiuntiva: anche s
 qualcuno riuscisse ad accedere alla rete Docker, non può chiamare i router AI senza
 il token. /health è escluso per permettere al healthcheck di docker-compose.
 """
+import hmac
+import logging
 import os
 
 from fastapi import Header, HTTPException, status
 
+logger = logging.getLogger(__name__)
+
 # Il token viene letto da env al startup — non cambia a runtime.
 _AI_SERVICE_TOKEN = os.environ.get("AI_SERVICE_TOKEN", "")
+
+if not _AI_SERVICE_TOKEN:
+    logger.warning(
+        "AI_SERVICE_TOKEN non configurato. In produzione impostare questa variabile "
+        "in .env.ai per abilitare l'autenticazione interna tra backend e ai_service."
+    )
 
 
 def require_internal_token(x_internal_token: str = Header(default="")) -> None:
@@ -22,19 +32,20 @@ def require_internal_token(x_internal_token: str = Header(default="")) -> None:
     Dipendenza FastAPI: rifiuta la request con 403 se il token non corrisponde.
     Non viene applicata su /health (dichiarato in main.py senza Depends).
 
-    Se AI_SERVICE_TOKEN è vuoto (non configurato), la dipendenza accetta tutto —
-    questo garantisce che il sistema funzioni in sviluppo anche senza il token,
-    pur segnalando il problema nei log.
+    Se AI_SERVICE_TOKEN è vuoto (non configurato in .env.ai) il servizio opera
+    in modalità sviluppo senza autenticazione — accettabile solo in dev/Docker
+    con la porta non esposta sull'host.
+
+    In produzione, AI_SERVICE_TOKEN DEVE essere impostato: un token mancante
+    lascia l'ai_service accessibile a chiunque raggiunga la rete Docker.
+
+    Il confronto usa hmac.compare_digest per resistere a timing side-channel.
     """
     if not _AI_SERVICE_TOKEN:
-        # Token non configurato: logga warning ma non blocca.
-        # In produzione impostare AI_SERVICE_TOKEN in .env.ai.
-        import logging
-        logging.getLogger(__name__).warning(
-            "AI_SERVICE_TOKEN non configurato — autenticazione interna disabilitata."
-        )
+        # Dev mode: nessun token configurato → accetta tutto (solo dentro Docker).
         return
-    if x_internal_token != _AI_SERVICE_TOKEN:
+    # Confronto constant-time per evitare timing attacks.
+    if not hmac.compare_digest(x_internal_token, _AI_SERVICE_TOKEN):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Token interno non valido.",

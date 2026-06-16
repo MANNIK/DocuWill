@@ -1,10 +1,14 @@
-from openai import OpenAI
-import os
 import json
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+import logging
+import os
 from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException
+from openai import AsyncOpenAI
+from pydantic import BaseModel, field_validator
 from deps import require_internal_token
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/classify",
@@ -12,7 +16,13 @@ router = APIRouter(
     dependencies=[Depends(require_internal_token)],
 )
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+_VALID_DOC_TYPES = {
+    "invoice", "ddt", "order", "price_list", "packing_list",
+    "shipment", "confirmation", "summary", "inventory", "unknown",
+}
+
 
 class ClassifyRequest(BaseModel):
     extracted_data: dict[str, Any]
@@ -24,11 +34,21 @@ class ClassifyResult(BaseModel):
     confidence: int
     reasoning: str
 
+    @field_validator("doc_type")
+    @classmethod
+    def validate_doc_type(cls, v: str) -> str:
+        return v if v in _VALID_DOC_TYPES else "unknown"
+
+    @field_validator("confidence")
+    @classmethod
+    def clamp_confidence(cls, v: int) -> int:
+        return max(0, min(100, v))
+
 
 @router.post("/document", response_model=ClassifyResult)
 async def classify_document(request: ClassifyRequest):
     """
-    Usa Claude per classificare il tipo di documento
+    Usa l'LLM per classificare il tipo di documento
     basandosi sui dati estratti.
     """
     prompt = f"""Classifica il tipo di documento aziendale basandoti su questi dati estratti.
@@ -58,10 +78,11 @@ Rispondi SOLO con JSON valido:
 """
 
     try:
-        message = client.chat.completions.create(
-        model="gpt-4o",
-        max_tokens=256,
-        messages=[{"role": "user", "content": prompt}],
+        message = await client.chat.completions.create(
+            model="gpt-4o",
+            max_tokens=256,
+            timeout=30,
+            messages=[{"role": "user", "content": prompt}],
         )
 
         clean = message.choices[0].message.content.strip()
@@ -74,8 +95,7 @@ Rispondi SOLO con JSON valido:
         data = json.loads(clean)
 
         if data.get("injection_detected"):
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Prompt injection rilevato in classify request: %s",
                 data.get("injection_note", "nessun dettaglio"),
             )
@@ -86,9 +106,11 @@ Rispondi SOLO con JSON valido:
 
         return ClassifyResult(**data)
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"JSON non valido: {e}")
+    except json.JSONDecodeError:
+        logger.exception("Classifier: risposta LLM non è JSON valido")
+        raise HTTPException(status_code=502, detail="Errore nell'analisi del documento.")
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore classificazione: {str(e)}")
+    except Exception:
+        logger.exception("Classifier: errore imprevisto")
+        raise HTTPException(status_code=500, detail="Errore interno durante la classificazione.")

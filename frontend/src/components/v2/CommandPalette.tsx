@@ -40,7 +40,9 @@ export default function CommandPalette({ open, onClose }: Props) {
 
   function navigate(doc: Document) {
     onClose()
-    router.push(`/documents/${doc.id}`)
+    // Naviga alla lista riconciliazioni filtrata per il documento selezionato.
+    // La route /documents/:id non esiste — tutta l'UI opera su /v2/reconciliations.
+    router.push(`/v2/reconciliations?doc=${doc.id}`)
   }
 
   if (!open) return null

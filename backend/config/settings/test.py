@@ -38,6 +38,7 @@ REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {  # type: ignore[index]
     "upload_burst": "10000/day",
     "register": "10000/day",
     "webhook": "10000/day",
+    "login": "10000/day",
 }
 
 # Non applicare security headers in test (niente HTTPS, HSTS, ecc.)

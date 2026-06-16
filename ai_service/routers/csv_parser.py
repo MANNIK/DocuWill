@@ -1,36 +1,54 @@
+import asyncio
 import hashlib
 import io
 import json
+import logging
 import os
 import re
-from openai import OpenAI
-from utils.supplier import normalize_for_cache
+from typing import Any
+
 import pandas as pd
 import redis as redis_lib
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
-from deps import require_internal_token
+from openai import AsyncOpenAI, OpenAI
 from pydantic import BaseModel
-from typing import Any
+from deps import require_internal_token
+from utils.supplier import normalize_for_cache
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/parse",
     tags=["CSV Parser"],
     dependencies=[Depends(require_internal_token)],
 )
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# AsyncOpenAI per le chiamate principali (non bloccano l'event loop)
+client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+
+# Limite dimensione upload (default 10 MB).
+_MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_SIZE", 10 * 1024 * 1024))
 
 # ─── Cache column mapping per fornitore ──────────────────────────────────────
 # Redis DB 2 (DB 0 = Celery broker, DB 1 = embedding cache in reconciliation.py)
 _struct_redis = None
 
 
+def _redis_url_with_db(base_url: str, db: int) -> str:
+    """Costruisce un URL Redis con il DB specificato, senza le fragilità di .replace()."""
+    import urllib.parse
+    parts = urllib.parse.urlparse(base_url)
+    # sostituisce solo la parte path (es. "/0" → "/2")
+    new_path = f"/{db}"
+    return urllib.parse.urlunparse(parts._replace(path=new_path))
+
+
 def _get_struct_redis():
     global _struct_redis
     if _struct_redis is None:
         try:
-            url = os.environ.get(
-                "CELERY_BROKER_URL", "redis://redis:6379/0"
-            ).replace("/0", "/2")
+            base = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+            url = _redis_url_with_db(base, 2)
             r = redis_lib.from_url(url, socket_connect_timeout=1)
             r.ping()
             _struct_redis = r
@@ -159,8 +177,9 @@ def read_raw_file(content: bytes, filename: str) -> list[list[Any]]:
             )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Errore lettura file: {e}")
+    except Exception:
+        logger.exception("Errore lettura file '%s'", filename)
+        raise HTTPException(status_code=400, detail="Impossibile leggere il file. Verifica che non sia corrotto.")
 
 
 def rows_to_text(sheets: list[list[list[Any]]], max_rows_per_sheet: int = 50, tail_rows: int = 15) -> str:
@@ -198,9 +217,9 @@ def rows_to_text(sheets: list[list[list[Any]]], max_rows_per_sheet: int = 50, ta
     return "\n".join(lines)
 
 
-def ask_claude_to_understand_structure(preview_text: str, filename: str) -> dict:
+async def ask_llm_to_understand_structure(preview_text: str, filename: str) -> dict:
     """
-    Chiede a GPT di identificare tutte le sezioni del file.
+    Chiede all'LLM di identificare tutte le sezioni del file.
     Restituisce {"sections": [...], "file_summary": {...}}.
     """
     prompt = f"""Sei un esperto di documenti aziendali. Analizza questo file
@@ -309,10 +328,11 @@ Regole sulle sezioni:
   non su discount. "Sconto %" o "% Sconto" → mappa su discount
 """
 
-    message = client.chat.completions.create(
+    message = await client.chat.completions.create(
         model="gpt-4o",
         max_tokens=2048,
         temperature=0,
+        timeout=90,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -325,15 +345,15 @@ Regole sulle sezioni:
 
     try:
         result = json.loads(raw)
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
+        logger.exception("LLM ha restituito JSON non valido per file '%s'", filename)
         raise HTTPException(
-            status_code=500,
-            detail=f"Struttura non valida: {e}\nRisposta: {raw[:200]}"
+            status_code=502,
+            detail="Errore nell'analisi del file. Riprova o controlla il formato."
         )
 
     if result.get("injection_detected"):
-        import logging
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Prompt injection rilevato nel file '%s': %s",
             filename, result.get("injection_note", "nessun dettaglio"),
         )
@@ -346,6 +366,30 @@ Regole sulle sezioni:
         "sections": result.get("sections", []),
         "file_summary": result.get("file_summary", {}),
     }
+
+
+# Client sincrono usato SOLO come callback in confirm_ambiguous_boundaries
+# (che è una funzione sincrona in table_segmentation.py e non può essere facilmente
+#  resa async senza refactoring del modulo). La chiamata viene eseguita in un thread
+#  pool via asyncio.to_thread per non bloccare l'event loop.
+_sync_client: OpenAI | None = None
+
+
+def _get_sync_client() -> OpenAI:
+    global _sync_client
+    if _sync_client is None:
+        _sync_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    return _sync_client
+
+
+def _gpt_confirm_sync(prompt: str) -> str:
+    """Callback sincrono per confirm_ambiguous_boundaries. Gira in un thread separato."""
+    msg = _get_sync_client().chat.completions.create(
+        model="gpt-4o", temperature=0, max_tokens=512,
+        timeout=30,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return msg.choices[0].message.content
 
 
 def parse_number(value: str) -> float | None:
@@ -453,14 +497,20 @@ def extract_rows(
     return parsed_rows
 
 
-"""
+@router.post("/csv", response_model=ParsedDocumentList)
+async def parse_csv_excel(file: UploadFile = File(...)):
+    """
     Riceve un file CSV o Excel di qualsiasi formato e struttura.
     Restituisce uno o più documenti — uno per sezione logica trovata.
     Funziona con qualsiasi lingua, layout, fornitore.
     """
-@router.post("/csv", response_model=ParsedDocumentList)
-async def parse_csv_excel(file: UploadFile = File(...)):
     content = await file.read()
+    if len(content) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File troppo grande. Limite: {_MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+        )
+
     filename = file.filename or "document"
 
     sheets = read_raw_file(content, filename)
@@ -517,18 +567,16 @@ async def parse_csv_excel(file: UploadFile = File(...)):
 
         segments = detect_table_segments(all_rows, sheet_starts=sheet_starts)
 
-        def _gpt_confirm(prompt: str) -> str:
-            msg = client.chat.completions.create(
-                model="gpt-4o", temperature=0, max_tokens=512,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return msg.choices[0].message.content
-
-        segments = confirm_ambiguous_boundaries(segments, _gpt_confirm)
+        # confirm_ambiguous_boundaries è sincrona; eseguila in un thread pool
+        # per non bloccare l'event loop durante la chiamata LLM interna.
+        segments = await asyncio.to_thread(
+            confirm_ambiguous_boundaries, segments, _gpt_confirm_sync
+        )
         preview = build_segmented_preview(
             all_rows, segments, rows_per_segment=15, tail_per_segment=5
         )
-        gpt_result = ask_claude_to_understand_structure(preview, filename)
+        gpt_result = await ask_llm_to_understand_structure(preview, filename)
+
     sections = gpt_result["sections"]
     file_summary = gpt_result.get("file_summary", {})
 
@@ -620,7 +668,7 @@ async def parse_csv_excel(file: UploadFile = File(...)):
                 "total_rows": len(rows),
                 "doc_type_confidence": section.get("doc_type_confidence", 0),
                 "structure_notes": section.get("notes", ""),
-                "claude_structure": section,
+                "llm_structure": section,
                 **({"file_summary": file_summary} if file_summary else {}),
             },
         ))

@@ -1,25 +1,69 @@
 import json
+import logging
 import os
 import re
 from difflib import SequenceMatcher
-from openai import OpenAI
+
 import redis as redis_lib
+from openai import OpenAI
+
 from .models import Document, Reconciliation, Discrepancy
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
-# Embedding helpers
+# Lazy initialization — evita side-effects a import-time
+# (il worker di test importa questo modulo senza Redis/OpenAI configurati).
 # ─────────────────────────────────────────────
 
-_redis = redis_lib.from_url(os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0").replace("/0", "/1"))
-_local_cache: dict[str, list[float]] = {}  # fallback in-process se Redis non risponde
+_openai_client: OpenAI | None = None
+_redis_client: redis_lib.Redis | None = None
+# Cache process-local: fallback quando Redis non è disponibile.
+# Bounded a MAX_LOCAL_CACHE_ENTRIES per evitare memory leak nei worker long-lived.
+_local_cache: dict[str, list[float]] = {}
+_MAX_LOCAL_CACHE_ENTRIES = 5000
+
+
+def _redis_url_with_db(base_url: str, db: int) -> str:
+    """Costruisce una URL Redis sostituendo il numero di DB in modo sicuro.
+    Formato atteso: redis://[user:pass@]host:port/db"""
+    parts = base_url.rsplit("/", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return f"{parts[0]}/{db}"
+    return f"{base_url}/{db}"
+
+
+def _get_openai_client() -> OpenAI:
+    """Restituisce il client OpenAI, creandolo alla prima chiamata (lazy)."""
+    global _openai_client
+    if _openai_client is None:
+        from django.conf import settings as _s
+        api_key = getattr(_s, "OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
+        _openai_client = OpenAI(api_key=api_key)
+    return _openai_client
+
+
+def _get_redis() -> redis_lib.Redis | None:
+    """Restituisce il client Redis per la cache embedding (DB 1), lazy + fail-soft."""
+    global _redis_client
+    if _redis_client is None:
+        try:
+            from django.conf import settings as _s
+            broker = getattr(_s, "CELERY_BROKER_URL", os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0"))
+            _redis_client = redis_lib.from_url(
+                _redis_url_with_db(broker, 1),
+                socket_connect_timeout=1,
+            )
+            _redis_client.ping()
+        except Exception:
+            _redis_client = None  # Redis non disponibile: continua senza cache
+    return _redis_client
 
 
 def _embed(text: str) -> list[float]:
     """
     Embedding con doppia cache: Redis (condivisa tra tutti i worker Celery)
-    + dict in-process come fallback. Evita chiamate duplicate anche tra processi diversi.
+    + dict in-process come fallback (bounded a _MAX_LOCAL_CACHE_ENTRIES).
     TTL 24h su Redis — gli embedding di fornitori/descrizioni non cambiano.
     """
     key_raw = text.strip().lower()[:200]
@@ -31,27 +75,32 @@ def _embed(text: str) -> list[float]:
         return _local_cache[key_raw]
 
     # 2. Cache Redis (condivisa tra worker)
+    r = _get_redis()
     redis_key = f"emb:{key_raw}"
-    try:
-        cached = _redis.get(redis_key)
-        if cached:
-            vec = json.loads(cached)
-            _local_cache[key_raw] = vec
-            return vec
-    except Exception:
-        pass  # Redis non disponibile → vai a OpenAI
+    if r:
+        try:
+            cached = r.get(redis_key)
+            if cached:
+                vec = json.loads(cached)
+                if len(_local_cache) < _MAX_LOCAL_CACHE_ENTRIES:
+                    _local_cache[key_raw] = vec
+                return vec
+        except Exception:
+            pass  # Redis non disponibile → vai a OpenAI
 
     # 3. Chiamata OpenAI
-    response = client.embeddings.create(
+    response = _get_openai_client().embeddings.create(
         model="text-embedding-3-small",
         input=key_raw,
     )
     vec = response.data[0].embedding
-    _local_cache[key_raw] = vec
-    try:
-        _redis.setex(redis_key, 86400, json.dumps(vec))  # TTL 24h
-    except Exception:
-        pass
+    if len(_local_cache) < _MAX_LOCAL_CACHE_ENTRIES:
+        _local_cache[key_raw] = vec
+    if r:
+        try:
+            r.setex(redis_key, 86400, json.dumps(vec))  # TTL 24h
+        except Exception:
+            pass
 
     return vec
 
@@ -88,21 +137,24 @@ def _normalize_value(val: str) -> float | str:
 # LIVELLO 1 — Match matematico con fuzzy fallback
 # ─────────────────────────────────────────────
 
-_FUZZY_THRESHOLD = 0.9
+_FUZZY_THRESHOLD = 0.9  # default — sovrascrivibile via AppSettings.fuzzy_threshold
 
 
-def _fuzzy_find(key: str, candidates: set[str]) -> tuple[str | None, float]:
+def _fuzzy_find(
+    key: str, candidates: set[str], threshold: float | None = None
+) -> tuple[str | None, float]:
     """
     Cerca il candidato più simile a key tra candidates.
-    Threshold 0.9: cattura differenze di formato (FRN-001 vs FRN001, score 0.92)
+    Threshold default 0.9: cattura differenze di formato (FRN-001 vs FRN001, score 0.92)
     ma non codici simili con cifre diverse (FRN-001 vs FRN-002, score 0.857).
     Restituisce (best_match, score) oppure (None, 0).
     """
+    t = threshold if threshold is not None else _FUZZY_THRESHOLD
     best, best_score = None, 0.0
     key_lower = key.lower()
     for c in candidates:
         score = SequenceMatcher(None, key_lower, c.lower()).ratio()
-        if score > best_score and score >= _FUZZY_THRESHOLD:
+        if score > best_score and score >= t:
             best, best_score = c, score
     return best, best_score
 
@@ -243,13 +295,13 @@ def level1_exact_match(rows1: dict, rows2: dict) -> tuple[bool, list[dict]]:
 
 
 # ─────────────────────────────────────────────
-# LIVELLO 2 — Claude valuta le discrepanze
+# LIVELLO 2 — LLM valuta le discrepanze
 # ─────────────────────────────────────────────
 
-def serialize_document_for_claude(doc: Document) -> dict:
+def serialize_document_for_llm(doc: Document) -> dict:
     """
     Serializza il documento includendo solo i campi con valori reali
-    più il raw_data originale — Claude vede tutto quello che c'è.
+    più il raw_data originale — l'LLM vede tutto quello che c'è.
     """
     rows = []
     for row in doc.rows.all():
@@ -389,7 +441,7 @@ Rispondi SOLO con JSON:
 }}
 """
 
-    message = client.chat.completions.create(
+    message = _get_openai_client().chat.completions.create(
         model="gpt-4o",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
@@ -508,7 +560,7 @@ Rispondi SOLO con JSON valido:
 Se i documenti sono perfettamente allineati restituisci "discrepancies": [].
 """
 
-    message = client.chat.completions.create(
+    message = _get_openai_client().chat.completions.create(
         model="gpt-4o",
         max_tokens=2048,
         temperature=0,  # output deterministico, riduce allucinazioni su valori identici
@@ -531,7 +583,7 @@ Se i documenti sono perfettamente allineati restituisci "discrepancies": [].
 
 def level3_decide(reconciliation: Reconciliation):
     """
-    Se dopo il giudizio di Claude non ci sono errori reali,
+    Se dopo il giudizio dell'LLM non ci sono errori reali,
     la riconciliazione viene auto-approvata.
     Se ci sono errori, rimane pending e l'operatore deve intervenire.
     In futuro: WebSocket / email / notifica push.
@@ -551,7 +603,7 @@ def level3_decide(reconciliation: Reconciliation):
 # Funzione principale — cascata
 # ─────────────────────────────────────────────
 
-def claude_reconcile(doc1: Document, doc2: Document) -> tuple[list[dict], int]:
+def llm_reconcile(doc1: Document, doc2: Document) -> tuple[list[dict], int]:
     """
     Riconciliazione adattiva a cascata:
 
@@ -611,11 +663,11 @@ def claude_reconcile(doc1: Document, doc2: Document) -> tuple[list[dict], int]:
     if perfect_match:
         return [], +10
 
-    # LIVELLO 2 — Claude entra solo se ci sono discrepanze
+    # LIVELLO 2 — LLM entra solo se ci sono discrepanze
     try:
         discrepancies = level2_semantic_check(doc1, doc2, discrepancies)
     except Exception as e:
-        # Claude non disponibile — teniamo le discrepanze del livello 1
+        # LLM non disponibile — teniamo le discrepanze del livello 1
         # e aggiungiamo una nota di sistema
         discrepancies.append({
             "type": "description_mismatch",
@@ -807,7 +859,7 @@ def find_and_reconcile(new_doc: Document):
             ).exists():
                 continue
 
-        # Claude decide se la coppia ha senso
+        # L'LLM decide se la coppia ha senso (skip se GPT non disponibile → fail-closed)
         if not are_documents_complementary(new_doc, candidate):
             continue
 
@@ -816,7 +868,11 @@ def find_and_reconcile(new_doc: Document):
             best_score = score
             best_match = candidate
 
-    if best_score < 30 or best_match is None:
+    # Usa match_threshold da AppSettings (configurabile via UI) invece di costante hardcoded.
+    from .models import AppSettings as _AppSettings
+    match_threshold = _AppSettings.get_solo().match_threshold
+
+    if best_score < match_threshold or best_match is None:
         return
 
     if new_doc.created_at < best_match.created_at:
@@ -824,7 +880,7 @@ def find_and_reconcile(new_doc: Document):
     else:
         doc1, doc2 = best_match, new_doc
 
-    discrepancies, confidence_adjustment = claude_reconcile(doc1, doc2)
+    discrepancies, confidence_adjustment = llm_reconcile(doc1, doc2)
 
     reconciliation = Reconciliation.objects.create(
         doc1=doc1,
@@ -922,7 +978,7 @@ Rispondi SOLO con JSON:
 {{"complementary": true/false, "reasoning": "spiegazione breve"}}"""
 
     try:
-        message = client.chat.completions.create(
+        message = _get_openai_client().chat.completions.create(
             model="gpt-4o",
             max_tokens=100,
             messages=[{"role": "user", "content": prompt}],
@@ -933,6 +989,8 @@ Rispondi SOLO con JSON:
             if raw.startswith("json"):
                 raw = raw[4:]
         result = json.loads(raw.strip())
-        return result.get("complementary", True)
+        return result.get("complementary", False)
     except Exception:
-        return True
+        # Fail-closed: se GPT non è disponibile non creiamo riconciliazioni spurie.
+        logger.warning("are_documents_complementary: GPT non disponibile, skip candidato.")
+        return False

@@ -4,8 +4,18 @@ import httpx
 from celery import shared_task
 from django.conf import settings
 from django.core.files.base import ContentFile
+from django.db import transaction
 
 logger = logging.getLogger(__name__)
+
+# Eccezioni transitori che vale la pena ritentare (rete, timeout).
+# Errori permanenti (JSON malformato, file non riconosciuto, ValueError) non vengono ritentati.
+_TRANSIENT_EXCEPTIONS = (
+    httpx.TimeoutException,
+    httpx.ConnectError,
+    httpx.RemoteProtocolError,
+    httpx.ReadTimeout,
+)
 
 
 def _ai_headers() -> dict:
@@ -62,20 +72,24 @@ def process_document_task(
 
             # Il primo documento aggiorna il record già creato
             first = parsed_docs[0]
-            _update_document(document, first)
-            document.status = Document.StatusChoices.PROCESSED
-            document.save()
+            with transaction.atomic():
+                _update_document(document, first)
+                document.status = Document.StatusChoices.PROCESSED
+                document.save()
+            # find_and_reconcile fuori dalla transaction: può fallire indipendentemente
             find_and_reconcile(document)
 
-            # Sezioni aggiuntive → nuovi Document separati
+            # Sezioni aggiuntive → nuovi Document separati (stessa created_by del primo)
             for extra in parsed_docs[1:]:
-                extra_doc = Document.objects.create(
-                    source=Document.SourceChoices.UPLOAD,
-                    status=Document.StatusChoices.PROCESSED,
-                    original_filename=filename,
-                )
-                _update_document(extra_doc, extra)
-                extra_doc.save()
+                with transaction.atomic():
+                    extra_doc = Document.objects.create(
+                        source=Document.SourceChoices.UPLOAD,
+                        status=Document.StatusChoices.PROCESSED,
+                        original_filename=filename,
+                        created_by=document.created_by,  # propaga owner
+                    )
+                    _update_document(extra_doc, extra)
+                    extra_doc.save()
                 find_and_reconcile(extra_doc)
 
         elif document.source == Document.SourceChoices.IMAGE:
@@ -89,9 +103,10 @@ def process_document_task(
                 response.raise_for_status()
                 parsed = response.json()
 
-            _save_ocr_result(document, parsed)
-            document.status = Document.StatusChoices.PROCESSED
-            document.save()
+            with transaction.atomic():
+                _save_ocr_result(document, parsed)
+                document.status = Document.StatusChoices.PROCESSED
+                document.save()
             find_and_reconcile(document)
 
         elif document.source == Document.SourceChoices.WHATSAPP:
@@ -133,9 +148,10 @@ def process_document_task(
                 response.raise_for_status()
                 parsed = response.json()
 
-            _save_ocr_result(document, parsed)
-            document.status = Document.StatusChoices.PROCESSED
-            document.save()
+            with transaction.atomic():
+                _save_ocr_result(document, parsed)
+                document.status = Document.StatusChoices.PROCESSED
+                document.save()
             find_and_reconcile(document)
 
     except Exception as exc:
@@ -153,7 +169,14 @@ def process_document_task(
             "process_document_task fallito per document_id=%s: %s",
             document_id, exc,
         )
-        raise self.retry(exc=exc, countdown=60)
+        # Retry solo per errori transitori (rete, timeout).
+        # Errori permanenti (file non valido, risposta AI malformata) non vengono ritentati.
+        is_transient = isinstance(exc, _TRANSIENT_EXCEPTIONS)
+        if isinstance(exc, httpx.HTTPStatusError):
+            is_transient = exc.response.status_code >= 500
+        if is_transient:
+            raise self.retry(exc=exc, countdown=60)
+        # Per errori permanenti il documento resta in stato ERROR senza retry.
 
 
 def _save_ocr_result(document, parsed: dict):

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { User, LogOut, Settings } from '@/components/v2/Icons'
+import { logout as apiLogout } from '@/lib/api'
 
 function getUsername(): string {
   if (typeof window === 'undefined') return 'Operatore'
@@ -38,9 +39,10 @@ export default function UserMenu() {
     return () => document.removeEventListener('mousedown', onClick)
   }, [])
 
-  function logout() {
-    localStorage.removeItem('access_token')
-    localStorage.removeItem('refresh_token')
+  async function logout() {
+    // apiLogout blacklista il refresh token lato server prima di rimuoverlo.
+    // Anche in caso di errore di rete il token locale viene comunque rimosso.
+    await apiLogout()
     router.push('/login')
   }
 

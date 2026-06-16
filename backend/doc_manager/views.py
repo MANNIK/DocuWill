@@ -1,16 +1,19 @@
 import hashlib
 import json
+import logging
 from datetime import date, timedelta
 
 from django.conf import settings
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.files.base import ContentFile
 from django.http import HttpResponse
-from django.db.models import Avg, Count, F, ExpressionWrapper, DurationField
+from django.db.models import Avg, Count, F, ExpressionWrapper, DurationField, Q
 from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 
 from .models import AppSettings, Discrepancy, Document, Reconciliation
 from .serializers import (
@@ -25,6 +28,28 @@ from .serializers import (
 from .throttling import RegisterThrottle, UploadBurstThrottle, WebhookThrottle
 from .utils import is_safe_external_url, normalize_supplier, supplier_key
 from .tasks import process_document_task
+
+logger = logging.getLogger(__name__)
+
+
+# ─── Autorizzazione object-level ─────────────────────────────────────────────
+
+class OwnerOrAdminMixin:
+    """
+    Filtra il queryset per utente proprietario se non is_staff.
+    Gli utenti is_staff vedono tutto (admin, supervisori).
+    Da mixare con generics.* PRIMA della classe base.
+
+    Sottoclassi che necessitano di un filtro diverso (es. Reconciliation)
+    sovrascrivono `get_queryset` invece di impostare `owner_field`.
+    """
+    owner_field: str = "created_by"
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.is_staff:
+            return qs
+        return qs.filter(**{self.owner_field: self.request.user})
 
 
 def _quota_exceeded(user) -> bool:
@@ -43,15 +68,15 @@ def _quota_exceeded(user) -> bool:
     return used >= quota
 
 
-class DocumentListView(generics.ListAPIView):
-    """Lista di tutti i documenti."""
-    queryset = Document.objects.prefetch_related("rows").all()
-    serializer_class = DocumentSerializer
-    permission_classes = [IsAuthenticated]  # toglieremo AllowAny quando aggiungiamo auth
+class DocumentListView(OwnerOrAdminMixin, generics.ListAPIView):
+    """Lista documenti dell'utente corrente (admin vede tutti)."""
+    queryset = Document.objects.annotate(row_count_annotated=Count("rows")).order_by("-created_at")
+    serializer_class = DocumentListSerializer
+    permission_classes = [IsAuthenticated]
 
 
-class DocumentDetailView(generics.RetrieveAPIView):
-    """Dettaglio di un singolo documento."""
+class DocumentDetailView(OwnerOrAdminMixin, generics.RetrieveAPIView):
+    """Dettaglio documento (solo il proprietario o admin)."""
     queryset = Document.objects.prefetch_related("rows").all()
     serializer_class = DocumentSerializer
     permission_classes = [IsAuthenticated]
@@ -196,7 +221,16 @@ class WhatsAppWebhookView(APIView):
                 if not validator.validate(url, request.POST, signature):
                     return Response({"error": "firma Twilio non valida"}, status=403)
             except ImportError:
-                pass  # twilio non installato nel container ancora
+                # Il pacchetto 'twilio' non è installato: rifiuta la request invece di
+                # accettarla silenziosamente — fail-closed per il webhook pubblico.
+                logger.error(
+                    "Pacchetto 'twilio' non installato: impossibile validare firma webhook. "
+                    "Aggiungi 'twilio' a requirements.txt."
+                )
+                return Response(
+                    {"error": "Configurazione webhook non valida. Contatta l'amministratore."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
 
             # Parsare payload Twilio (form-data)
             num_media = int(request.POST.get("NumMedia", 0))
@@ -265,10 +299,17 @@ class RegisterView(APIView):
 
         if not username or not password:
             return Response({"error": "username e password obbligatori"}, status=400)
-        if len(password) < 6:
-            return Response({"error": "password troppo corta (min 6 caratteri)"}, status=400)
+        if len(username) > 150:
+            return Response({"error": "username troppo lungo (max 150 caratteri)"}, status=400)
         if User.objects.filter(username=username).exists():
             return Response({"error": "username già in uso"}, status=400)
+
+        # Valida la password con i Django AUTH_PASSWORD_VALIDATORS.
+        temp_user = User(username=username, email=email)
+        try:
+            validate_password(password, user=temp_user)
+        except DjangoValidationError as e:
+            return Response({"error": list(e.messages)}, status=400)
 
         User.objects.create_user(username=username, password=password, email=email)
         return Response({"message": "Account creato. Puoi ora accedere."}, status=201)
@@ -296,10 +337,16 @@ class LogoutView(APIView):
 
 
 class ResetDatabaseView(APIView):
-    """Elimina tutti i documenti, riconciliazioni e discrepanze. Solo per sviluppo."""
-    permission_classes = [AllowAny]
+    """Elimina tutti i documenti, riconciliazioni e discrepanze.
+    Solo per sviluppo: richiede DEBUG=True e utente is_staff."""
+    permission_classes = [IsAdminUser]
 
     def post(self, request):
+        if not settings.DEBUG:
+            return Response(
+                {"error": "Reset disponibile solo in modalità DEBUG."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         from .models import Discrepancy, Reconciliation, Document
         Discrepancy.objects.all().delete()
         Reconciliation.objects.all().delete()
@@ -308,8 +355,20 @@ class ResetDatabaseView(APIView):
         return Response({"deleted": count})
 
 
-class ReconciliationListView(generics.ListAPIView):
-    """Lista di tutte le riconciliazioni."""
+class ReconciliationOwnerMixin:
+    """Filtra riconciliazioni per utente: include quelle dove l'utente possiede doc1 o doc2."""
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.request.user.is_staff:
+            return qs
+        return qs.filter(
+            Q(doc1__created_by=self.request.user) | Q(doc2__created_by=self.request.user)
+        )
+
+
+class ReconciliationListView(ReconciliationOwnerMixin, generics.ListAPIView):
+    """Lista riconciliazioni dell'utente corrente (admin vede tutte)."""
     queryset = Reconciliation.objects.select_related(
         "doc1", "doc2"
     ).prefetch_related("discrepancy_list").all()
@@ -317,8 +376,8 @@ class ReconciliationListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
 
-class ReconciliationDetailView(generics.RetrieveAPIView):
-    """Dettaglio di una riconciliazione con tutte le discrepanze."""
+class ReconciliationDetailView(ReconciliationOwnerMixin, generics.RetrieveAPIView):
+    """Dettaglio riconciliazione (solo il proprietario o admin)."""
     queryset = Reconciliation.objects.select_related(
         "doc1", "doc2"
     ).prefetch_related("discrepancy_list").all()
@@ -326,7 +385,7 @@ class ReconciliationDetailView(generics.RetrieveAPIView):
     permission_classes = [IsAuthenticated]
 
 
-class ReconciliationUpdateView(generics.UpdateAPIView):
+class ReconciliationUpdateView(ReconciliationOwnerMixin, generics.UpdateAPIView):
     """L'operatore approva, rifiuta o corregge una riconciliazione."""
     queryset = Reconciliation.objects.all()
     serializer_class = ReconciliationUpdateSerializer
@@ -337,26 +396,34 @@ class ReconciliationUpdateView(generics.UpdateAPIView):
 # ─── Nuovi endpoint per UI v2 ────────────────────────────────────────────────
 
 class DashboardStatsView(APIView):
-    """KPI aggregati per la dashboard v2."""
+    """KPI aggregati per la dashboard v2 — scoped per utente."""
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         today = timezone.now().date()
         seven_days_ago = today - timedelta(days=6)
+        user = request.user
 
-        pending = Document.objects.filter(status=Document.StatusChoices.PENDING).count()
-        processed_today = Document.objects.filter(
+        # Scope per utente (admin vede tutto)
+        doc_qs = Document.objects if user.is_staff else Document.objects.filter(created_by=user)
+        recon_qs = (
+            Reconciliation.objects if user.is_staff
+            else Reconciliation.objects.filter(
+                Q(doc1__created_by=user) | Q(doc2__created_by=user)
+            )
+        )
+
+        pending = doc_qs.filter(status=Document.StatusChoices.PENDING).count()
+        processed_today = doc_qs.filter(
             status=Document.StatusChoices.PROCESSED,
             updated_at__date=today,
         ).count()
 
-        recon_total = Reconciliation.objects.count()
-        recon_approved = Reconciliation.objects.filter(
-            status=Reconciliation.StatusChoices.APPROVED
-        ).count()
+        recon_total = recon_qs.count()
+        recon_approved = recon_qs.filter(status=Reconciliation.StatusChoices.APPROVED).count()
         match_rate = round(recon_approved / recon_total * 100) if recon_total else 0
 
-        avg_ms = Document.objects.filter(
+        avg_ms = doc_qs.filter(
             status=Document.StatusChoices.PROCESSED
         ).annotate(
             duration=ExpressionWrapper(
@@ -367,25 +434,42 @@ class DashboardStatsView(APIView):
         avg_processing_ms = int(avg_ms.total_seconds() * 1000) if avg_ms else 0
 
         queue = ReconciliationSerializer(
-            Reconciliation.objects.select_related('doc1', 'doc2')
-            .prefetch_related('discrepancy_list')[:8],
+            recon_qs.select_related('doc1', 'doc2')
+            .prefetch_related('discrepancy_list').order_by('-created_at')[:8],
             many=True
         ).data
 
-        ingestion_7d = []
-        for i in range(7):
-            d = seven_days_ago + timedelta(days=i)
-            cnt = Document.objects.filter(created_at__date=d).count()
-            ingestion_7d.append({"date": d.isoformat(), "count": cnt})
+        # Un'unica query aggregata per i 7 giorni (invece di 7 COUNT separati).
+        from django.db.models.functions import TruncDate
+        ingestion_raw = (
+            doc_qs.filter(created_at__date__gte=seven_days_ago)
+            .annotate(day=TruncDate('created_at'))
+            .values('day')
+            .annotate(count=Count('id'))
+            .order_by('day')
+        )
+        ingestion_map = {str(r['day']): r['count'] for r in ingestion_raw}
+        ingestion_7d = [
+            {"date": (seven_days_ago + timedelta(days=i)).isoformat(),
+             "count": ingestion_map.get(str(seven_days_ago + timedelta(days=i)), 0)}
+            for i in range(7)
+        ]
 
         disc_histogram = list(
+            Discrepancy.objects.filter(
+                Q(reconciliation__doc1__created_by=user)
+                | Q(reconciliation__doc2__created_by=user)
+            ).values('discrepancy_type')
+            .annotate(count=Count('id'))
+            .order_by('-count')[:10]
+        ) if not user.is_staff else list(
             Discrepancy.objects.values('discrepancy_type')
             .annotate(count=Count('id'))
             .order_by('-count')[:10]
         )
 
         recent_docs = DocumentListSerializer(
-            Document.objects.order_by('-created_at')[:10],
+            doc_qs.annotate(row_count_annotated=Count('rows')).order_by('-created_at')[:10],
             many=True,
             context={'request': request},
         ).data
@@ -403,14 +487,17 @@ class DashboardStatsView(APIView):
 
 
 class WhatsAppInboxView(generics.ListAPIView):
-    """Lista documenti ricevuti via WhatsApp/immagine per l'inbox v2."""
+    """Lista documenti ricevuti via WhatsApp/immagine per l'inbox v2 — scoped per utente."""
     serializer_class = DocumentListSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Document.objects.filter(
+        qs = Document.objects.filter(
             source__in=[Document.SourceChoices.WHATSAPP, Document.SourceChoices.IMAGE]
-        ).order_by('-created_at')
+        ).annotate(row_count_annotated=Count('rows')).order_by('-created_at')
+        if self.request.user.is_staff:
+            return qs
+        return qs.filter(created_by=self.request.user)
 
 
 class SuppliersListView(APIView):
@@ -523,8 +610,8 @@ class SupplierDetailView(APIView):
 
 
 class SettingsView(APIView):
-    """Legge e aggiorna le impostazioni applicazione."""
-    permission_classes = [IsAuthenticated]
+    """Legge e aggiorna le impostazioni applicazione (solo admin)."""
+    permission_classes = [IsAdminUser]
 
     def get(self, request):
         obj = AppSettings.get_solo()
@@ -540,8 +627,8 @@ class SettingsView(APIView):
 
 
 class ClearCacheView(APIView):
-    """Svuota la cache Redis dei column mapping per i fornitori (DB 2)."""
-    permission_classes = [IsAuthenticated]
+    """Svuota la cache Redis dei column mapping per i fornitori (DB 2). Solo admin."""
+    permission_classes = [IsAdminUser]
 
     def delete(self, request):
         try:
@@ -554,17 +641,27 @@ class ClearCacheView(APIView):
             if keys:
                 r.delete(*keys)
             return Response({"deleted": deleted})
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
+        except Exception:
+            logger.exception("Errore durante la pulizia della cache Redis col-map")
+            return Response({"error": "Errore durante la pulizia della cache."}, status=500)
 
 
 class DiscrepancyUpdateView(generics.UpdateAPIView):
-    """L'operatore risolve una singola discrepanza."""
-    from .models import Discrepancy as _Disc
-    queryset = Discrepancy.objects.all()
+    """L'operatore risolve una singola discrepanza (solo il proprietario o admin)."""
     serializer_class = DiscrepancyUpdateSerializer
     permission_classes = [IsAuthenticated]
     http_method_names = ["patch"]
+
+    def get_queryset(self):
+        qs = Discrepancy.objects.select_related(
+            "reconciliation__doc1", "reconciliation__doc2"
+        )
+        if self.request.user.is_staff:
+            return qs
+        return qs.filter(
+            Q(reconciliation__doc1__created_by=self.request.user)
+            | Q(reconciliation__doc2__created_by=self.request.user)
+        )
 
     def perform_update(self, serializer):
         resolution = serializer.validated_data.get('resolution', '')
@@ -581,12 +678,21 @@ class NotificationsView(APIView):
 
     def get(self, request):
         last_24h = timezone.now() - timezone.timedelta(hours=24)
+        user = request.user
 
-        pending_recons = Reconciliation.objects.filter(
+        doc_qs = Document.objects if user.is_staff else Document.objects.filter(created_by=user)
+        recon_qs = (
+            Reconciliation.objects if user.is_staff
+            else Reconciliation.objects.filter(
+                Q(doc1__created_by=user) | Q(doc2__created_by=user)
+            )
+        )
+
+        pending_recons = recon_qs.filter(
             status=Reconciliation.StatusChoices.PENDING
         ).select_related('doc1', 'doc2').order_by('-created_at')[:20]
 
-        error_docs = Document.objects.filter(
+        error_docs = doc_qs.filter(
             status=Document.StatusChoices.ERROR,
             updated_at__gte=last_24h,
         ).order_by('-updated_at')[:10]
@@ -603,20 +709,20 @@ class NotificationsView(APIView):
             items.append({
                 "type": "doc_error",
                 "message": f"Errore elaborazione: {d.original_filename or d.supplier_name}",
-                "link": f"/documents/{d.id}",
+                "link": f"/v2/reconciliations",
                 "created_at": d.updated_at.isoformat(),
             })
 
-        errors_last_24h = Document.objects.filter(
+        errors_last_24h = doc_qs.filter(
             status=Document.StatusChoices.ERROR,
             updated_at__gte=last_24h,
         ).count()
 
         return Response({
-            "pending_reconciliations": Reconciliation.objects.filter(
+            "pending_reconciliations": recon_qs.filter(
                 status=Reconciliation.StatusChoices.PENDING
             ).count(),
-            "pending_documents": Document.objects.filter(
+            "pending_documents": doc_qs.filter(
                 status=Document.StatusChoices.PENDING
             ).count(),
             "errors_last_24h": errors_last_24h,
@@ -629,16 +735,18 @@ class SearchView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        from django.db.models import Q
         q = request.query_params.get('q', '').strip()
         if len(q) < 2:
             return Response([])
-        docs = Document.objects.filter(
+        base_qs = Document.objects if request.user.is_staff else Document.objects.filter(
+            created_by=request.user
+        )
+        docs = base_qs.filter(
             Q(supplier_name__icontains=q) |
             Q(supplier_canonical__icontains=q) |
             Q(document_number__icontains=q) |
             Q(original_filename__icontains=q)
-        ).order_by('-created_at')[:10]
+        ).annotate(row_count_annotated=Count('rows')).order_by('-created_at')[:10]
         return Response(DocumentListSerializer(
             docs, many=True, context={'request': request}
         ).data)
@@ -661,12 +769,35 @@ class MeView(APIView):
         u = request.user
         email = request.data.get('email')
         password = request.data.get('password')
+        current_password = request.data.get('current_password')
+
+        # Il cambio password o email richiede la password corrente (re-autenticazione).
+        # Protegge da account takeover con un access token rubato.
+        if password or email is not None:
+            if not current_password:
+                return Response(
+                    {"error": "current_password obbligatorio per modificare email o password."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not u.check_password(current_password):
+                return Response(
+                    {"error": "Password corrente non valida."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         if email is not None:
+            import re as _re
+            if not _re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$', email):
+                return Response({"error": "Email non valida."}, status=400)
             u.email = email
+
         if password:
-            if len(password) < 6:
-                return Response({"error": "password troppo corta (min 6 caratteri)"}, status=400)
+            try:
+                validate_password(password, user=u)
+            except DjangoValidationError as e:
+                return Response({"error": list(e.messages)}, status=400)
             u.set_password(password)
+
         u.save()
         return Response({
             "id": u.id,

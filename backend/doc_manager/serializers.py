@@ -179,6 +179,10 @@ class DocumentListSerializer(serializers.ModelSerializer):
     row_count = serializers.SerializerMethodField()
 
     def get_row_count(self, obj):
+        # Usa il valore annotato dalla queryset (Count) per evitare N+1.
+        # Fallback a .count() per retrocompatibilità con serializer usati fuori dalle view.
+        if hasattr(obj, "row_count_annotated"):
+            return obj.row_count_annotated
         return obj.rows.count()
 
     class Meta:

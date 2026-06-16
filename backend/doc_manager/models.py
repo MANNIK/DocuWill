@@ -19,9 +19,10 @@ class AppSettings(models.Model):
 
     @classmethod
     def get_solo(cls):
-        obj = cls.objects.first()
-        if obj is None:
-            obj = cls.objects.create()
+        """Restituisce (o crea) il singleton in modo atomico — nessuna race condition."""
+        from django.db import transaction
+        with transaction.atomic():
+            obj, _ = cls.objects.get_or_create(pk=1)
         return obj
 
 
@@ -102,7 +103,11 @@ class Document(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
-        indexes = [models.Index(Lower("supplier_name"), name="doc_supplier_lower_idx")]
+        indexes = [
+            models.Index(Lower("supplier_name"), name="doc_supplier_lower_idx"),
+            models.Index(fields=["status"], name="doc_status_idx"),
+            models.Index(fields=["created_at"], name="doc_created_at_idx"),
+        ]
 
 
 class DocumentRow(models.Model):
@@ -181,6 +186,16 @@ class Reconciliation(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status"], name="recon_status_idx"),
+        ]
+        # Constraint DB: impedisce riconciliazioni duplicate tra la stessa coppia di documenti.
+        constraints = [
+            models.UniqueConstraint(
+                fields=["doc1", "doc2"],
+                name="unique_reconciliation_pair",
+            )
+        ]
 
 
 class Discrepancy(models.Model):
