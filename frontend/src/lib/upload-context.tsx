@@ -87,6 +87,9 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
         const current = await getDocument(doc.id).catch(() => null)
         if (!current) break
         if (current.status === 'processed') {
+          // Step 1 viene messo 'active' quando step 0 finisce, ma non veniva
+          // mai marcato 'done' → la barra si bloccava a 6/7 = 85%.
+          advance(1, 'done')
           advance(2, 'done')
           advance(3, 'done')
           advance(4, 'done')
@@ -96,6 +99,7 @@ export function UploadProvider({ children }: { children: React.ReactNode }) {
           break
         }
         if (current.status === 'error') {
+          advance(1, 'error')
           advance(2, 'error')
           patch({ error: current.error_message || 'Errore durante l\'elaborazione' })
           break
