@@ -768,17 +768,44 @@ def find_and_reconcile(new_doc: Document):
     best_score = 0
 
     for candidate in candidates:
-        already_exists = Reconciliation.objects.filter(
-            doc1=candidate, doc2=new_doc
-        ).exists() or Reconciliation.objects.filter(
-            doc1=new_doc, doc2=candidate
-        ).exists()
-        if already_exists:
+        # Verifica duplicati per ID (fast path)
+        from django.db.models import Q as _Q
+        if Reconciliation.objects.filter(
+            _Q(doc1=candidate, doc2=new_doc) | _Q(doc1=new_doc, doc2=candidate)
+        ).exists():
             continue
 
-        # Stesso filename = duplicato, salta sempre
+        # Stesso filename = duplicato caricato due volte, salta sempre
         if candidate.original_filename == new_doc.original_filename:
             continue
+
+        # Verifica duplicati per "fingerprint" — stessa coppia già riconciliata
+        # anche se i Document sono oggetti diversi (stesso file caricato due volte).
+        # Attivo solo quando almeno uno dei due ha document_number valorizzato,
+        # altrimenti il fingerprint sarebbe troppo generico.
+        cand_num = (candidate.document_number or "").strip()
+        new_num = (new_doc.document_number or "").strip()
+        if cand_num or new_num:
+            cand_sup = candidate.supplier_canonical or ""
+            new_sup = new_doc.supplier_canonical or ""
+            if Reconciliation.objects.filter(
+                _Q(
+                    doc1__doc_type=candidate.doc_type,
+                    doc1__supplier_canonical=cand_sup,
+                    doc1__document_number=cand_num,
+                    doc2__doc_type=new_doc.doc_type,
+                    doc2__supplier_canonical=new_sup,
+                    doc2__document_number=new_num,
+                ) | _Q(
+                    doc1__doc_type=new_doc.doc_type,
+                    doc1__supplier_canonical=new_sup,
+                    doc1__document_number=new_num,
+                    doc2__doc_type=candidate.doc_type,
+                    doc2__supplier_canonical=cand_sup,
+                    doc2__document_number=cand_num,
+                )
+            ).exists():
+                continue
 
         # Claude decide se la coppia ha senso
         if not are_documents_complementary(new_doc, candidate):
@@ -838,9 +865,11 @@ def are_documents_complementary(doc_a: Document, doc_b: Document) -> bool:
         same_supplier = _supplier_similarity(doc_a.supplier_name, doc_b.supplier_name) >= 0.82
 
     if same_type:
-        # Tipi versionabili: tariffari, listini, conferme vengono aggiornati periodicamente.
-        # Stesso fornitore + stesso tipo = quasi certamente un confronto versioni.
-        _VERSIONABLE = {"price_list", "tariff", "confirmation", "summary", "inventory"}
+        # Tipi versionabili: conferme e inventari vengono aggiornati periodicamente.
+        # price_list è ESCLUSO: un tariffario CSV e uno OCR hanno strutture item_code
+        # incompatibili che producono decine di falsi "missing_in_doc2" senza valore.
+        # Se servono due price_list da riconciliare bisogna usare il trigger manuale.
+        _VERSIONABLE = {"tariff", "confirmation", "summary", "inventory"}
         if doc_a.doc_type in _VERSIONABLE:
             if same_supplier or both_unknown_supplier:
                 return True
