@@ -230,7 +230,9 @@ def _update_document(document, parsed: dict):
     from .models import Document, DocumentRow
     from .utils import normalize_supplier, canonical_supplier_name
 
-    document.doc_type = parsed.get("doc_type", Document.TypeChoices.UNKNOWN)
+    _valid_types = {c[0] for c in Document.TypeChoices.choices}
+    raw_type = parsed.get("doc_type", Document.TypeChoices.UNKNOWN)
+    document.doc_type = raw_type if raw_type in _valid_types else Document.TypeChoices.UNKNOWN
     document.supplier_name = normalize_supplier(parsed.get("supplier_name", ""))
     existing = list(
         Document.objects.exclude(pk=document.pk).exclude(supplier_canonical='')

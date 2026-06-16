@@ -297,6 +297,14 @@ Regole sul column_mapping:
   su total_price, non su discount
 
 Regole sulle sezioni:
+- REGOLA ANTI-SEZIONE-FANTASMA (CRITICA): Se un file inizia con un blocco di righe
+  in formato libero o "chiave: valore" (es. "DOCUMENTO DI TRASPORTO", "Mittente: Alfa
+  S.r.l.", "N. Ordine: ORD-2026-001", "Data: 15/03/2026") seguito da una tabella con
+  intestazioni di colonna, crea UNA SOLA sezione. Usa il blocco iniziale SOLO per
+  popolare "metadata" (supplier_name, document_number, document_date). NON includere
+  quelle righe in data_row_indices. NON creare una sezione separata per le righe di
+  intestazione, titolo o testo libero prima della tabella: creerebbero un documento
+  fantasma inutile con sole descrizioni testuali e nessun dato numerico.
 - Crea una sezione separata per ogni fornitore diverso, ogni tipo di documento
   diverso, ogni tabella logicamente indipendente
 - NON creare sezioni per dati aggregati o riepilogativi (es. "RIEPILOGO SPEDIZIONE",
@@ -644,9 +652,17 @@ async def parse_csv_excel(file: UploadFile = File(...)):
             header_cells=header_cells,
         )
 
-        # Scarta sezioni aggregate (nessun item_code, meno di 2 righe):
-        # sono footer/riepilogo, non documenti commerciali autonomi
-        if len(rows) < 2 and not any(r.item_code for r in rows):
+        # Scarta sezioni senza dati reali: nessun valore numerico E nessun item_code.
+        # Queste sezioni contengono solo righe di testo libero (intestazioni, metadati
+        # del documento, titoli) che GPT non è riuscito a riconoscere come header
+        # block. Un documento commerciale valido ha sempre almeno un prezzo o una
+        # quantità o un codice articolo.
+        has_numeric = any(
+            r.quantity is not None or r.unit_price is not None or r.total_price is not None
+            for r in rows
+        )
+        has_item_codes = any(r.item_code for r in rows)
+        if not has_numeric and not has_item_codes:
             continue
 
         metadata = section.get("metadata", {})

@@ -875,7 +875,26 @@ def find_and_reconcile(new_doc: Document):
     if best_score < match_threshold or best_match is None:
         return
 
-    if new_doc.created_at < best_match.created_at:
+    # Ordinamento semantico: il documento "di riferimento" (ordine, tariffario)
+    # va sempre come doc1, il documento "di risposta" (DDT, fattura, conferma) come doc2.
+    # Così `missing_in_doc2` = ERROR indica un articolo nell'ordine non consegnato,
+    # che è il caso più critico da segnalare all'operatore.
+    _DOC_PRIORITY = {
+        "order": 0,
+        "price_list": 0,
+        "invoice": 1,
+        "confirmation": 1,
+        "ddt": 2,
+        "packing_list": 2,
+        "shipment": 3,
+    }
+    p_new = _DOC_PRIORITY.get(new_doc.doc_type, 5)
+    p_best = _DOC_PRIORITY.get(best_match.doc_type, 5)
+    if p_new < p_best:
+        doc1, doc2 = new_doc, best_match
+    elif p_best < p_new:
+        doc1, doc2 = best_match, new_doc
+    elif new_doc.created_at < best_match.created_at:
         doc1, doc2 = new_doc, best_match
     else:
         doc1, doc2 = best_match, new_doc
@@ -930,10 +949,13 @@ def are_documents_complementary(doc_a: Document, doc_b: Document) -> bool:
             if same_supplier or both_unknown_supplier:
                 return True
 
-        # Tipi transazionali: ogni ordine/fattura/DDT è un'entità distinta.
-        # Due ordini dello stesso fornitore NON sono complementari a meno che
-        # non condividano lo stesso numero documento (revisione/rettifica).
-        _TRANSACTIONAL = {"order", "invoice", "ddt", "packing_list", "shipment"}
+        # Tipi transazionali: ogni ordine/fattura/DDT/tariffario è un'entità distinta.
+        # Due documenti dello stesso tipo e fornitore NON sono complementari a meno
+        # che non condividano lo stesso numero documento (revisione/rettifica).
+        # price_list è incluso: zone diverse dello stesso tariffario e versioni diverse
+        # di tariffari dello stesso fornitore NON vengono riconciliate automaticamente
+        # — evita decine di false riconciliazioni quando un file CSV contiene 4+ zone.
+        _TRANSACTIONAL = {"order", "invoice", "ddt", "packing_list", "shipment", "price_list"}
         if doc_a.doc_type in _TRANSACTIONAL:
             if (same_supplier
                     and doc_a.document_number
