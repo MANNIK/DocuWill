@@ -28,8 +28,23 @@ La riconciliazione **non** è un confronto generico tra documenti: è sempre il 
 | `confirmation` | Conferma d'ordine | Risposta del fornitore che accetta l'ordine |
 | `price_list` | Tariffario / Listino prezzi | Tabella prezzi per prodotti o servizi di trasporto |
 | `shipment` | Spedizione | Documento di tracking / export spedizioni corriere |
+| `inventory` | Inventario | Elenco articoli a magazzino, spesso da file multi-sheet |
 | `summary` | Riepilogo | Documento di sintesi, spesso generato automaticamente |
-| `unknown` | Sconosciuto | Tipo non riconosciuto con certezza |
+| `unknown` | Sconosciuto | Tipo non riconosciuto con certezza dall'AI |
+
+---
+
+## Normalizzazione del fornitore (`supplier_canonical`)
+
+Prima di qualsiasi confronto, il nome del fornitore viene normalizzato in un campo separato: `supplier_canonical`. Questo campo è quello usato per il prefiltro dei candidati e per le guardie di deduplicazione.
+
+Il processo di normalizzazione ha tre passi:
+
+1. **Pulizia base**: minuscolo, rimozione punteggiatura, rimozione suffissi legali ("S.r.l.", "S.p.A.", "GmbH", "Ltd", "Inc", "B.V.", ecc.) e parole generiche ("forniture", "group", "italia").
+2. **Fuzzy matching** con `rapidfuzz` (Levenshtein) sui canonical già presenti nel DB. Se la similarità è ≥ 85%, il nuovo documento viene agganciato al canonical esistente invece di crearne uno nuovo.
+3. Il canonical viene salvato su `Document.supplier_canonical` al momento dell'elaborazione Celery.
+
+Effetto pratico: "Alfa Forniture S.r.l.", "ALFA FORNITURE SRL" e "Alfa Forniture" producono tutti lo stesso `supplier_canonical = "alfa"`. Il prefiltro candidati usa questo campo per raggruppare in modo efficiente tutti i documenti dello stesso fornitore.
 
 ---
 
@@ -53,7 +68,7 @@ Queste coppie sono hardcoded come "complementari" perché il rapporto tra i due 
 
 Alcuni tipi di documento vengono aggiornati periodicamente: quando arriva una nuova versione dello stesso documento, ha senso confrontarla con quella precedente.
 
-Tipi versionabili: `tariff`, `confirmation`, `summary`, `inventory`
+Tipi versionabili: `confirmation`, `summary`, `inventory`
 
 **Regola:** due documenti dello stesso tipo versionabile, dello stesso fornitore → riconciliati automaticamente.
 
@@ -73,9 +88,9 @@ GPT riceve tipo, fornitore e nome file di entrambi i documenti e risponde `true/
 
 ### 1. Due documenti transazionali dello stesso tipo (regola fissa)
 
-I tipi **transazionali** sono: `order`, `invoice`, `ddt`, `packing_list`, `shipment`.
+I tipi **transazionali** sono: `order`, `invoice`, `ddt`, `packing_list`, `shipment`, `price_list`.
 
-Ogni documento transazionale è un'entità distinta nel tempo: un ordine non ha senso confrontarlo con un altro ordine diverso (sono due acquisti distinti, non due versioni della stessa cosa).
+Ogni documento transazionale è un'entità distinta: un ordine non ha senso confrontarlo con un altro ordine diverso (sono due acquisti distinti, non due versioni della stessa cosa). Stesso discorso per i tariffari: zone diverse dello stesso tariffario o versioni aggiornate non vengono riconciliate automaticamente, evitando decine di false discrepanze tra sezioni.
 
 **Eccezione:** se i due documenti transazionali dello stesso tipo hanno lo stesso numero documento, allora sono quasi certamente una revisione dello stesso documento → vengono riconciliati.
 
@@ -83,16 +98,12 @@ Esempi:
 - `order` + `order` (fornitore diverso) → ❌ NON riconciliati
 - `order` + `order` (stesso fornitore, numero diverso) → ❌ NON riconciliati
 - `order` + `order` (stesso numero documento) → ✅ Riconciliati (revisione)
+- `price_list` + `price_list` (stesse zone, fornitore uguale) → ❌ NON riconciliati
+- `price_list` + `price_list` (stesso numero documento) → ✅ Riconciliati (aggiornamento tariffe)
 
-### 2. Due `price_list` (tariffari)
+Un tariffario si riconcilia comunque con una **conferma prezzi** (`price_list` + `confirmation`) tramite le coppie note.
 
-Anche se sembrano "versionabili", i tariffari sono stati esclusi dalla riconciliazione automatica per un motivo pratico: un tariffario estratto da OCR (foto) e uno da CSV hanno strutture degli item_code completamente incompatibili.
-
-Il tariffario CSV genera item_code artificiali tipo `ZONA-A-0.5-1.0-STD` durante il parsing. Il tariffario OCR genera item_code diversi (es. `TL-CONF-2026-CBT-004-R1`). Il sistema non riesce ad abbinarli e produce decine di discrepanze `missing_in_doc2` prive di significato reale.
-
-Un tariffario può comunque riconciliarsi con una **conferma prezzi** (`price_list` + `confirmation`) tramite le coppie note.
-
-### 3. Documenti già riconciliati — deduplicazione
+### 2. Documenti già riconciliati — deduplicazione
 
 Il sistema previene la creazione di riconciliazioni duplicate tramite due livelli di guardia:
 
@@ -102,7 +113,7 @@ Il sistema previene la creazione di riconciliazioni duplicate tramite due livell
 
 La guardia 2 si attiva **solo** quando almeno uno dei due documenti ha un numero documento valorizzato (DDT-AM-2026-0318, DL-7741, ORD-2026-W07, ecc.). Se entrambi non hanno numero documento il fingerprint sarebbe troppo generico e rischierebbe di bloccare riconciliazioni legittime.
 
-### 4. Stesso filename
+### 3. Stesso filename
 
 Se due documenti hanno lo stesso `original_filename` vengono sempre saltati, indipendentemente dal contenuto. È il caso più ovvio di duplicato.
 
@@ -142,30 +153,48 @@ Per i candidati che superano tutte le guardie, si calcola uno score 0–100:
 | Overlap articoli Jaccard 50–80% | +25 |
 | Overlap articoli Jaccard 20–50% | +10 |
 
-**Soglia minima:** score < 30 → nessuna riconciliazione avviata.
+**Soglia minima configurabile:** per default score < 30 → nessuna riconciliazione avviata. La soglia è modificabile tramite `AppSettings.match_threshold` nella UI di amministrazione.
 
 Il candidato con lo score più alto vince.
 
 ---
 
+## Ordinamento semantico doc1 / doc2
+
+Una volta trovata la coppia vincente, il sistema assegna i ruoli **doc1** (documento di riferimento) e **doc2** (documento da verificare) seguendo una priorità semantica, non cronologica:
+
+| Priorità | Tipi | Ruolo |
+|----------|------|-------|
+| 0 (più alto) | `order`, `price_list` | doc1 — esprime l'intenzione originale |
+| 1 | `invoice`, `confirmation` | doc2 — risponde all'intenzione |
+| 2 | `ddt`, `packing_list` | doc2 — attesta l'esecuzione fisica |
+| 3 | `shipment` | doc2 — tracking finale |
+| 5 (default) | qualsiasi altro | ordine cronologico (upload precedente = doc1) |
+
+**Perché è importante:** le discrepanze sono asimmetriche. Un articolo presente in **doc1 ma assente in doc2** diventa `missing_in_doc2` con severity **error** (qualcosa è stato richiesto ma non consegnato/fatturato). Un articolo presente in **doc2 ma assente in doc1** diventa `extra_in_doc2` con severity **warning** (qualcosa di inatteso è apparso nel documento di risposta).
+
+Se l'ordine fosse invertito (DDT come doc1, ordine come doc2), una riga mancante nel DDT apparirebbe come "extra nell'ordine" con severity warning — e verrebbe auto-approvata invece di restare pending per revisione operatore.
+
+---
+
 ## Algoritmo di riconciliazione a cascata (L1 → L2 → L3)
 
-Una volta trovata la coppia, si avvia la riconciliazione in tre livelli:
+Una volta assegnati doc1 e doc2, si avvia la riconciliazione in tre livelli:
 
 ### Livello 1 — Confronto matematico (documenti standard)
 
 Per documenti con item_code (ordini, fatture, DDT, packing list):
 - Ogni riga del doc1 viene abbinata a una riga del doc2 per item_code
-- Matching esatto → confronto diretto dei valori numerici
-- Matching fuzzy (similarità ≥ 90%, es. `FRN-001` vs `FRN001`) → confronto + warning `code_mismatch`
-- Matching semantico per descrizione (embedding similarity ≥ 88%, es. "Apple Juice 1L" vs "Succo di Mela 1 litro") → confronto + warning
-- Nessun match → discrepanza `missing_in_doc2` (severity: error)
-- Righe extra nel doc2 non abbinate → `extra_in_doc2` (severity: warning)
+- **Matching esatto** → confronto diretto dei valori numerici
+- **Matching fuzzy** (similarità ≥ 90%, es. `FRN-001` vs `FRN001`) → confronto + warning `code_mismatch`
+- **Matching semantico per descrizione** (embedding cosine similarity ≥ 88%, es. "Apple Juice 1L" vs "Succo di Mela 1 litro") → confronto + warning; usa OpenAI `text-embedding-3-small` con cache Redis DB 1
+- Nessun match → discrepanza `missing_in_doc2` (severity: **error**)
+- Righe extra nel doc2 non abbinate → `extra_in_doc2` (severity: **warning**)
 - Se tutto quadra: stop qui, auto-approvazione (L3)
 
 ### Livello 1b — Confronto deterministico (documenti non-standard)
 
-Per tariffari e listini prezzi (`price_list`), il confronto per item_code non funziona (strutture diverse). Si usa invece `reconcile_nonstandard` che:
+Per tariffari e listini prezzi (`price_list`), il confronto per item_code non funziona (strutture diverse tra fornitori e tra CSV/OCR). Si usa invece `reconcile_nonstandard` che:
 - Raggruppa le righe per `section_name` (ZONA A, ZONA B, SUPPLEMENTI…)
 - Abbina le righe all'interno della stessa sezione per chiave colonna
 - Confronta i valori numerici cella per cella
@@ -173,17 +202,23 @@ Per tariffari e listini prezzi (`price_list`), il confronto per item_code non fu
 
 ### Livello 2 — Valutazione semantica GPT (solo se ci sono discrepanze)
 
-GPT non vede l'intero documento: riceve **solo le righe coinvolte nelle discrepanze** trovate al L1. Per ogni discrepanza decide:
-- È un errore reale? (severity: error)
-- È una rappresentazione diversa della stessa cosa? (severity: warning o info, da abbassare)
-- È irrilevante? (da rimuovere)
+GPT non vede l'intero documento: riceve **solo le righe coinvolte nelle discrepanze** trovate al L1, per risparmiare ~10× di token rispetto a mandare tutto.
 
-Esempio: `FRN-001` in doc1 e `FRN001` in doc2 → GPT capisce che è lo stesso codice con formattazione diversa e abbassa la severity da error a info.
+Eccezione: per documenti non-standard (tariffari) vengono mandate tutte le righe, ma i tariffari sono piccoli per definizione (poche decine di righe).
+
+Per ogni discrepanza GPT decide:
+- È un errore reale? → mantiene severity **error**
+- È una rappresentazione diversa della stessa cosa? → abbassa a **warning** o **info**
+- È irrilevante? → può rimuovere la discrepanza
+
+Esempio: `FRN-001` in doc1 e `FRN001` in doc2 → GPT capisce che è lo stesso codice con formattazione diversa e abbassa la severity da warning a info.
+
+GPT può anche aumentare il `match_confidence` finale se ritiene la coppia molto coerente (`confidence_adjustment` sommato allo score iniziale, cappato a 100).
 
 ### Livello 3 — Decisione finale
 
 - **Nessuna discrepanza severity=error** → riconciliazione auto-approvata (`approved`)
-- **Almeno una discrepanza severity=error** → rimane `pending`, l'operatore deve intervenire
+- **Almeno una discrepanza severity=error** → rimane `pending`, l'operatore deve intervenire manualmente
 
 ---
 
@@ -191,6 +226,9 @@ Esempio: `FRN-001` in doc1 e `FRN001` in doc2 → GPT capisce che è lo stesso c
 
 ```
 Documento caricato
+       │
+       ▼
+Normalizza supplier_canonical (rapidfuzz fuzzy sui canonical esistenti)
        │
        ▼
 Prefiltro candidati (supplier_canonical + ultimi 30gg, max 25)
@@ -205,14 +243,14 @@ Per ogni candidato:
 
        │
        ▼
-Score > 30?
+Score ≥ soglia (default 30)?
   ├── NO → nessuna riconciliazione
-  └── SI → avvia riconciliazione
-              │
+  └── SI → assegna doc1/doc2 per priorità semantica
+              │ (order/price_list = doc1; ddt/packing_list = doc2)
               ▼
        Documenti standard?
-       ├── SI → L1 math → discrepanze? → L2 GPT
-       └── NO → L1b deterministico (tariffari) → [GPT residuo se necessario]
+       ├── SI → L1 math (exact → fuzzy → embedding) → discrepanze? → L2 GPT
+       └── NO → L1b deterministico (tariffari, per sezione) → [GPT residuo]
               │
               ▼
        L3 decide
@@ -224,22 +262,51 @@ Score > 30?
 
 ## Esempi reali dalla test suite
 
-### Coppia attesa: `04-multi-table.csv` ↔ `07-nested-packing.csv`
+### p1 — match perfetto (zero discrepanze)
+- `p1-invoice-perfect.csv` (fattura) ↔ `p1-order-perfect.csv` (ordine)
+- Stesso fornitore Alfa Forniture, stessi articoli, stesse quantità, stessi prezzi
+- Score: 50 (fornitore +30, Jaccard 100% +20)
+- L1: 0 discrepanze → L3: auto-approvata
+- Risultato: `approved`
+
+### p2 — discrepanze reali (prezzo e quantità)
+- `p2-invoice-mismatch.csv` (fattura) ↔ `p2-order-mismatch.csv` (ordine)
+- Ordine: Monitor qty=8 €399, Tastiera qty=15. Fattura: Monitor €419, Tastiera qty=12
+- Score: 70 (stesso fornitore Beta Distribuzione +30, Jaccard 100% +40)
+- L1: 2 discrepanze error (price_mismatch, quantity_mismatch)
+- Risultato: `pending` con 2 errori da approvare
+
+### p3 — riga mancante nel DDT
+- `p3-order-missing-row.csv` (ordine, 5 articoli) ↔ `p3-ddt-missing-row.csv` (DDT, 4 articoli)
+- Il DDT non include GT-A04 "Cavo Cat6 305m" (non consegnato)
+- doc1 = ordine (priorità 0), doc2 = DDT (priorità 2)
+- L1: GT-A04 presente in doc1 (ordine) ma assente in doc2 (DDT) → `missing_in_doc2` severity=**error**
+- Risultato: `pending` con 1 errore critico
+
+### p4 — codici articolo con formato diverso
+- `p4-order-fuzzy.csv` ↔ `p4-confirm-fuzzy.csv`
+- Ordine usa `DM-001`, conferma usa `DM001` (stessa cosa, trattino diverso)
+- Score: 100 (stesso fornitore Delta Mobili, fuzzy match al 92%)
+- L1: 4 warning `code_mismatch` (DM-001 vs DM001) → L2: GPT abbassa a info
+- Risultato: `approved` (solo info, nessun errore reale)
+
+### p5 — discrepanza prezzo su tariffario
+- `p5-tariff-nonstandard.csv` (price_list) ↔ `p5-confirm-nonstandard.csv` (confirmation)
+- Coppia nota: `price_list` + `confirmation`
+- Tariffa "Standard" nel tariffario €22 vs conferma €25
+- L1b deterministico: 1 discrepanza `price_mismatch` severity=error
+- Risultato: `pending` con 1 errore
+
+### Coppia marginale: `04-multi-table.csv` ↔ `07-nested-packing.csv`
 - Ordine Alpine Möbel (ALP-843 qty=4) ↔ Packing list EuroPack (ALP-843 qty=6)
-- Score: 40 (fornitore +30, Jaccard ALP-843/574/114 = 100% +10)
-- L1: discrepanza quantity ALP-843 → L2: GPT conferma errore reale
-- Risultato: `pending` con 1 discrepanza `quantity_mismatch` severity=error
+- Fornitori diversi (fornitore prodotto vs corriere/imballatore) — match cross-fornitore
+- Score: 40 (basso — fornitore diverso, solo overlap codici articolo)
+- Risultato: `pending` con 1 errore `quantity_mismatch` — l'operatore decide se la coppia è sensata
 
-### Coppia attesa: `03-header-offset.csv` ↔ foto conferma d'ordine OCR
-- Ordine Nordic Design (ORD-2026-W07) ↔ Conferma d'ordine OCR (OC-2026-IT-0094)
-- `order` + `confirmation` → coppia nota, sempre riconciliata
-- Score: 30 (fornitore +30)
-- Risultato: discrepanze sui metadati (warning), auto-approvata
-
-### Coppia che NON si riconcilia: `09-shipping-tariff.csv` ↔ foto tariffario OCR
-- Entrambi `price_list` → `price_list` esclusa da `_VERSIONABLE`
-- `are_documents_complementary()` restituisce False
-- Risultato: nessuna riconciliazione creata
+### Coppia che NON si riconcilia: sezioni di `09-shipping-tariff.csv`
+- Il file ha 4 zone tariffarie (A-D, E-H, EU, extra-EU) → 4 documenti `price_list`
+- Due `price_list` dello stesso fornitore → tipo transazionale, nessuna riconciliazione automatica
+- Risultato: nessuna riconciliazione tra le sezioni dello stesso tariffario
 
 ### Coppia che NON si riconcilia: `03-header-offset.csv` ↔ sezione Nordic Design di `04-multi-table.csv`
 - Entrambi `order` → tipo transazionale, non riconciliabile con stesso tipo
