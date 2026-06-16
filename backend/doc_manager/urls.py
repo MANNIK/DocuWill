@@ -13,6 +13,7 @@ urlpatterns = [
 
     # Auth
     path("auth/register/", views.RegisterView.as_view(), name="register"),
+    path("auth/logout/", views.LogoutView.as_view(), name="logout"),
 
     # Dev utility
     path("dev/reset/", views.ResetDatabaseView.as_view(), name="dev-reset"),

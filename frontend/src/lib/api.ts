@@ -44,6 +44,18 @@ async function apiFetch(url: string, options: RequestInit = {}): Promise<Respons
     window.location.href = '/login'
     throw new Error('Unauthorized')
   }
+  if (res.status === 429) {
+    // Rate limit superato (throttle DRF o quota giornaliera).
+    let message = 'Troppe richieste. Riprova tra qualche minuto.'
+    try {
+      const body = await res.clone().json()
+      if (body?.error) message = body.error
+      else if (body?.detail) message = body.detail
+    } catch { /* ignore parse error */ }
+    const err = new Error(message) as Error & { status: number }
+    err.status = 429
+    throw err
+  }
   return res
 }
 
@@ -330,6 +342,29 @@ export async function updateMe(payload: { email?: string; password?: string }): 
   })
   if (!res.ok) throw new Error('Errore aggiornamento profilo')
   return res.json()
+}
+
+/**
+ * Logout: blacklista il refresh token lato server, poi rimuove i token
+ * da localStorage. In caso di errore (token già scaduto, rete), pulisce
+ * comunque lo storage e reindirizza al login.
+ */
+export async function logout(): Promise<void> {
+  const refresh = typeof window !== 'undefined' ? localStorage.getItem('refresh_token') : null
+  try {
+    if (refresh) {
+      await apiFetch(`${API}/api/auth/logout/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh }),
+      })
+    }
+  } catch { /* ignora errori di rete: logout è comunque locale */ }
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('access_token')
+    localStorage.removeItem('refresh_token')
+    window.location.href = '/login'
+  }
 }
 
 export async function simulateWhatsapp(payload: {

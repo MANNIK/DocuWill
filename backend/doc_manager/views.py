@@ -3,6 +3,7 @@ import json
 from datetime import date, timedelta
 
 from django.conf import settings
+from django.core.files.base import ContentFile
 from django.http import HttpResponse
 from django.db.models import Avg, Count, F, ExpressionWrapper, DurationField
 from django.utils import timezone
@@ -21,8 +22,25 @@ from .serializers import (
     ReconciliationSerializer,
     ReconciliationUpdateSerializer,
 )
-from .utils import normalize_supplier, supplier_key
+from .throttling import RegisterThrottle, UploadBurstThrottle, WebhookThrottle
+from .utils import is_safe_external_url, normalize_supplier, supplier_key
 from .tasks import process_document_task
+
+
+def _quota_exceeded(user) -> bool:
+    """
+    True se l'utente ha già raggiunto la quota giornaliera di documenti.
+    Tetto persistente sul budget LLM, complementare al throttle di frequenza.
+    Conta i documenti creati oggi (query indicizzata su created_by + created_at).
+    """
+    quota = AppSettings.get_solo().daily_document_quota
+    if not quota or quota <= 0:
+        return False
+    today = timezone.now().date()
+    used = Document.objects.filter(
+        created_by=user, created_at__date=today
+    ).count()
+    return used >= quota
 
 
 class DocumentListView(generics.ListAPIView):
@@ -45,8 +63,15 @@ class DocumentUploadView(APIView):
     crea il Document e lancia il task Celery.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UploadBurstThrottle]
 
     def post(self, request):
+        if _quota_exceeded(request.user):
+            return Response(
+                {"error": "Quota giornaliera di documenti raggiunta. Riprova domani."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         serializer = DocumentUploadSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -58,15 +83,17 @@ class DocumentUploadView(APIView):
             source=Document.SourceChoices.UPLOAD,
             status=Document.StatusChoices.PENDING,
             original_filename=file.name,
+            created_by=request.user,
         )
 
-        # Salva il file in memoria per passarlo al task
-        file_content = file.read()
+        # Persisti il file su storage: il task lo rilegge da lì.
+        # Evita di serializzare i bytes come lista di interi nel payload Celery/Redis
+        # (esplosione di memoria su file grandi).
+        document.file.save(file.name, ContentFile(file.read()), save=True)
 
-        # Lancia il task Celery in modo asincrono
         process_document_task.delay(
             document_id=document.id,
-            file_content=list(file_content),  # bytes non serializzabili in JSON
+            file_content=None,
             filename=file.name,
         )
 
@@ -82,26 +109,48 @@ class ImageUploadView(APIView):
     senza bisogno di un URL pubblico. Utile per testare l'OCR localmente.
     """
     permission_classes = [IsAuthenticated]
+    throttle_classes = [UploadBurstThrottle]
+
+    # Estensioni immagine accettate per l'OCR (coerenti con _MIME_MAP dell'ai_service).
+    ALLOWED_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 
     def post(self, request):
+        if _quota_exceeded(request.user):
+            return Response(
+                {"error": "Quota giornaliera di documenti raggiunta. Riprova domani."},
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
         file = request.FILES.get("file")
         if not file:
             return Response({"error": "file è obbligatorio"}, status=status.HTTP_400_BAD_REQUEST)
+
+        max_size = getattr(settings, "MAX_UPLOAD_SIZE", 10 * 1024 * 1024)
+        if file.size > max_size:
+            return Response(
+                {"error": f"File troppo grande (max {max_size // (1024 * 1024)} MB)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not (file.name or "").lower().endswith(self.ALLOWED_IMAGE_EXTENSIONS):
+            return Response(
+                {"error": "Formato immagine non supportato. Usa JPG, PNG o WEBP."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         document = Document.objects.create(
             source=Document.SourceChoices.IMAGE,
             status=Document.StatusChoices.PENDING,
             original_filename=file.name,
+            created_by=request.user,
         )
 
-        file_content = file.read()
-        # Persist image so it can be served as a preview
-        from django.core.files.base import ContentFile
-        document.file.save(file.name, ContentFile(file_content), save=True)
+        # Persisti l'immagine su storage: serve sia come preview sia come sorgente
+        # per il task (che la rilegge da lì invece di riceverla nel payload Celery).
+        document.file.save(file.name, ContentFile(file.read()), save=True)
 
         process_document_task.delay(
             document_id=document.id,
-            file_content=list(file_content),
+            file_content=None,
             filename=file.name,
         )
 
@@ -120,8 +169,10 @@ class WhatsAppWebhookView(APIView):
     Formato mock (sviluppo locale, TWILIO_AUTH_TOKEN non configurato):
       POST application/json
       {"from": "+39...", "media_url": "...", "caption": "..."}
+      Accettato SOLO se WHATSAPP_DEV_MODE=True (off di default in produzione).
     """
     permission_classes = [AllowAny]
+    throttle_classes = [WebhookThrottle]
 
     def post(self, request):
         twilio_configured = bool(settings.TWILIO_AUTH_TOKEN)
@@ -157,13 +208,28 @@ class WhatsAppWebhookView(APIView):
             caption = request.POST.get("Body", "")
             sender = request.POST.get("From", "")
         else:
-            # Dev mode: payload JSON manuale per test locali senza Twilio
+            # Dev mode: payload JSON non firmato. Abilitato solo esplicitamente,
+            # altrimenti chiunque potrebbe innescare OCR+LLM su URL arbitrari.
+            if not settings.WHATSAPP_DEV_MODE:
+                return Response(
+                    {"error": "Webhook non configurato (firma Twilio assente)."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             media_url = request.data.get("media_url", "")
             caption = request.data.get("caption", "")
             sender = request.data.get("from", "")
 
         if not media_url:
             return Response({"error": "media_url mancante"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Anti-SSRF: il media_url verrà scaricato dal worker. Rifiuta schemi non
+        # http(s) e host che risolvono a IP privati/loopback/link-local.
+        # I media Twilio (api.twilio.com) sono pubblici e passano il controllo.
+        if not is_safe_external_url(media_url):
+            return Response(
+                {"error": "media_url non valido o non consentito."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         document = Document.objects.create(
             source=Document.SourceChoices.WHATSAPP,
@@ -189,6 +255,7 @@ class WhatsAppWebhookView(APIView):
 class RegisterView(APIView):
     """Registrazione nuovo operatore."""
     permission_classes = [AllowAny]
+    throttle_classes = [RegisterThrottle]
 
     def post(self, request):
         from django.contrib.auth.models import User
@@ -205,6 +272,27 @@ class RegisterView(APIView):
 
         User.objects.create_user(username=username, password=password, email=email)
         return Response({"message": "Account creato. Puoi ora accedere."}, status=201)
+
+
+class LogoutView(APIView):
+    """
+    Logout server-side: blacklista il refresh token così non è più utilizzabile
+    (richiede `token_blacklist` in INSTALLED_APPS + ROTATE/BLACKLIST in SIMPLE_JWT).
+    Il client rimuove comunque i token da localStorage.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        refresh = request.data.get("refresh", "")
+        if not refresh:
+            return Response({"error": "refresh token mancante"}, status=400)
+        try:
+            RefreshToken(refresh).blacklist()
+        except Exception:
+            # Token già scaduto/invalido: il logout è comunque considerato riuscito.
+            pass
+        return Response({"message": "Logout effettuato."}, status=200)
 
 
 class ResetDatabaseView(APIView):

@@ -9,6 +9,9 @@ class AppSettings(models.Model):
     ocr_engine = models.CharField(max_length=20, default='gpt-4o')
     match_threshold = models.IntegerField(default=30)
     fuzzy_threshold = models.FloatField(default=0.9)
+    # Numero massimo di documenti che un singolo utente può caricare al giorno.
+    # Tetto sul budget LLM: ogni documento innesca parsing/OCR + riconciliazione.
+    daily_document_quota = models.IntegerField(default=200)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -79,6 +82,17 @@ class Document(models.Model):
 
     # Errore elaborazione
     error_message = models.TextField(blank=True)
+
+    # Utente che ha caricato il documento — usato per la quota giornaliera.
+    # null per i documenti via webhook WhatsApp (nessun utente autenticato).
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=True,
+        related_name="documents",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

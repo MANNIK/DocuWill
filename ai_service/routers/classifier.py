@@ -1,11 +1,16 @@
 from openai import OpenAI
 import os
 import json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Any
+from deps import require_internal_token
 
-router = APIRouter(prefix="/classify", tags=["Classifier"])
+router = APIRouter(
+    prefix="/classify",
+    tags=["Classifier"],
+    dependencies=[Depends(require_internal_token)],
+)
 
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 

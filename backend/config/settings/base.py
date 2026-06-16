@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     # third party
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     # local
     "doc_manager",
@@ -83,12 +84,36 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
         "rest_framework.permissions.IsAuthenticated",
     ),
+    # Rate limiting — protegge il budget LLM da spam di documenti.
+    # Lo state dei throttle vive nel CACHES Redis (condiviso tra processi).
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": env("THROTTLE_ANON", default="20/hour"),
+        "user": env("THROTTLE_USER", default="1000/day"),
+        "upload_burst": env("THROTTLE_UPLOAD_BURST", default="10/min"),
+        "register": env("THROTTLE_REGISTER", default="5/hour"),
+        "webhook": env("THROTTLE_WEBHOOK", default="60/min"),
+    },
 }
 
-# CORS
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-]
+# Cache — Redis DB 3 (DB 0 = broker, 1 = embeddings, 2 = col-map cache).
+# Necessario per il throttling DRF: lo stato dei contatori dev'essere
+# condiviso tra processi (runserver/gunicorn worker + retry), non per-process.
+_CACHE_URL = env("CELERY_BROKER_URL").rsplit("/", 1)[0] + "/3"
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": _CACHE_URL,
+    }
+}
+
+# CORS — origini da env (default localhost in dev)
+CORS_ALLOWED_ORIGINS = env.list(
+    "CORS_ALLOWED_ORIGINS", default=["http://localhost:3000"]
+)
 CORS_ALLOW_HEADERS = [
     "accept",
     "accept-encoding",
@@ -105,7 +130,43 @@ CORS_ALLOW_CREDENTIALS = True
 # AI Service
 AI_SERVICE_URL = env("AI_SERVICE_URL")
 
+# Token condiviso backend ↔ ai_service. Il microservizio FastAPI non è più
+# esposto sull'host; questo header (X-Internal-Token) è la seconda barriera.
+AI_SERVICE_TOKEN = env("AI_SERVICE_TOKEN", default="")
+
 # Twilio WhatsApp — opzionali, se vuoti il webhook opera in dev mode (no firma)
 TWILIO_ACCOUNT_SID = env("TWILIO_ACCOUNT_SID", default="")
 TWILIO_AUTH_TOKEN = env("TWILIO_AUTH_TOKEN", default="")
 TWILIO_WHATSAPP_NUMBER = env("TWILIO_WHATSAPP_NUMBER", default="")
+
+# Webhook WhatsApp: accettare payload JSON NON firmati (senza verifica Twilio)
+# solo se esplicitamente abilitato. In produzione resta off → niente trigger
+# anonimi di OCR/LLM via webhook.
+WHATSAPP_DEV_MODE = env.bool("WHATSAPP_DEV_MODE", default=False)
+
+# Limite dimensione upload (byte). Default 10 MB. Protegge RAM worker/broker.
+MAX_UPLOAD_SIZE = env.int("MAX_UPLOAD_SIZE", default=10 * 1024 * 1024)
+DATA_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE
+FILE_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE
+
+# ─── JWT ──────────────────────────────────────────────────────────────────
+from datetime import timedelta  # noqa: E402
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=env.int("JWT_ACCESS_MINUTES", default=15)),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=env.int("JWT_REFRESH_DAYS", default=1)),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+}
+
+# ─── Security headers (attivi solo in produzione, DEBUG=False) ──────────────
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = env.bool("SECURE_SSL_REDIRECT", default=True)
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=31536000)
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"

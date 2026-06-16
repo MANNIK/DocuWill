@@ -57,9 +57,10 @@ services:
     command: uvicorn main:app --host 0.0.0.0 --port 8001 --reload
     volumes:
       - ./ai_service:/app
-    ports:
-      - "8001:8001"
-    env_file: .env.backend
+    # Nessuna porta esposta sull'host: il servizio è raggiungibile solo
+    # dalla rete Docker interna (http://ai_service:8001). Questo chiude
+    # l'accesso diretto dal browser/internet che bypassa Django+auth.
+    env_file: .env.ai
 
   frontend:
     build: ./frontend

@@ -7,11 +7,16 @@ from openai import OpenAI
 from utils.supplier import normalize_for_cache
 import pandas as pd
 import redis as redis_lib
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
+from deps import require_internal_token
 from pydantic import BaseModel
 from typing import Any
 
-router = APIRouter(prefix="/parse", tags=["CSV Parser"])
+router = APIRouter(
+    prefix="/parse",
+    tags=["CSV Parser"],
+    dependencies=[Depends(require_internal_token)],
+)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # ─── Cache column mapping per fornitore ──────────────────────────────────────
@@ -275,10 +280,14 @@ Regole sulle sezioni:
 - Righe con "SOTTOTALE", "SUBTOTALE", "SUBTOTAL", "Parziale" o simili sono totali
   parziali di una sezione continua — NON sono separatori di sezioni distinte.
   Stessa logica per "TOTALE GENERALE", "Grand Total", "TOTALE FINALE"
-- Se vedi marcatori "--- SHEET N ---", ogni sheet è un foglio Excel separato
-- Se vedi "... [N righe omesse] ...", il file contiene più righe di quelle mostrate;
-  le ultime righe visibili dopo il marcatore sono la coda reale del file — usale per
-  riconoscere righe di riepilogo/totale da escludere da data_row_indices
+- Il file è già stato pre-segmentato: ogni marcatore "--- TABELLA N (righe X-Y) ---"
+  delimita una tabella fisicamente distinta. Di norma ogni TABELLA corrisponde a una
+  sezione, ma puoi fonderne o spezzarne se il contenuto lo richiede
+- Una riga marcata "[possibile header]" è l'inizio candidato di un'altra tabella
+  nascosta dentro lo stesso segmento: trattala come header di una nuova sezione
+- Se vedi "... [N righe dati omesse] ...", tra le righe mostrate ce ne sono altre non
+  visualizzate; le righe mostrate dopo il marcatore sono la CODA reale della tabella —
+  usale per riconoscere righe di riepilogo/totale da escludere da data_row_indices
 - Per documenti con colonne "Qty per Box"/"Quantità per Collo" E "Total Qty"/
   "Quantità Totale", mappa SEMPRE "quantity" sulla colonna del totale,
   non sulla quantità unitaria per collo
@@ -433,12 +442,10 @@ async def parse_csv_excel(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Il file è vuoto.")
 
     all_rows = []
+    sheet_starts = []  # indici globali (su all_rows) in cui inizia ogni sheet Excel
     for sheet in sheets:
+        sheet_starts.append(len(all_rows))
         all_rows.extend(sheet)
-
-    # GPT vede solo le prime 50 righe per capire la struttura
-    # ma extract_rows usa TUTTE le righe
-    preview = rows_to_text(sheets, max_rows_per_sheet=50)
 
     # ─── Cache pre-GPT: salta la chiamata se stesso fornitore + stessi header ───
     _pre_supplier = _extract_supplier_hint(all_rows)
@@ -473,12 +480,39 @@ async def parse_csv_excel(file: UploadFile = File(...)):
             "file_summary": {},
         }
     else:
+        # ─── Preview multi-tabella: Python trova i confini fisici (zero GPT nel
+        #     caso comune), così GPT vede l'inizio di OGNI tabella in una sola
+        #     chiamata — anche quelle oltre la riga 50 del file. ───
+        from .table_segmentation import (
+            detect_table_segments,
+            confirm_ambiguous_boundaries,
+            build_segmented_preview,
+        )
+
+        segments = detect_table_segments(all_rows, sheet_starts=sheet_starts)
+
+        def _gpt_confirm(prompt: str) -> str:
+            msg = client.chat.completions.create(
+                model="gpt-4o", temperature=0, max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return msg.choices[0].message.content
+
+        segments = confirm_ambiguous_boundaries(segments, _gpt_confirm)
+        preview = build_segmented_preview(
+            all_rows, segments, rows_per_segment=15, tail_per_segment=5
+        )
         gpt_result = ask_claude_to_understand_structure(preview, filename)
     sections = gpt_result["sections"]
     file_summary = gpt_result.get("file_summary", {})
 
     if not sections:
         raise HTTPException(status_code=422, detail="Nessuna sezione dati trovata.")
+
+    # Cap: processa al massimo 20 sezioni per file. Oltre questo numero è quasi
+    # certamente un file ostile progettato per amplificare le chiamate LLM.
+    MAX_SECTIONS = 20
+    sections = sections[:MAX_SECTIONS]
 
     documents = []
     for section in sections:

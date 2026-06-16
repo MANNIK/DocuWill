@@ -1,11 +1,52 @@
+import ipaddress
 import re
+import socket
 import unicodedata
+from urllib.parse import urlparse
 
 try:
     from rapidfuzz import fuzz, process as fuzz_process
     _HAS_RAPIDFUZZ = True
 except ImportError:
     _HAS_RAPIDFUZZ = False
+
+
+def is_safe_external_url(url: str) -> bool:
+    """
+    Protezione SSRF: accetta solo URL http/https il cui host risolve a indirizzi
+    pubblici. Rifiuta loopback, reti private, link-local (incl. 169.254.169.254 —
+    l'endpoint metadata di AWS/GCP) e altri range non instradabili.
+
+    Usata prima di ogni `httpx.get(media_url)` (tasks.py) e nel webhook (views.py):
+    impedisce che un media_url ostile faccia scaricare risorse interne o leggere
+    i metadata cloud, e poi inviare tutto a GPT-4o Vision.
+    """
+    if not url or not isinstance(url, str):
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = parsed.hostname
+    if not host:
+        return False
+    try:
+        # Risolvi TUTTI gli indirizzi del host: se anche uno solo è privato, rifiuta.
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError):
+        return False
+    for info in infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False
+    return True
 
 # Suffissi societari ordinati per lunghezza DESC (longest-match-first)
 # KEEP IN SYNC con ai_service/utils/supplier.py

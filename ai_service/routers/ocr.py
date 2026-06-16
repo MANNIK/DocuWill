@@ -3,14 +3,38 @@ import json
 import os
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from deps import require_internal_token
 from openai import OpenAI
 from pydantic import BaseModel
 
-router = APIRouter(prefix="/ocr", tags=["OCR"])
+router = APIRouter(
+    prefix="/ocr",
+    tags=["OCR"],
+    dependencies=[Depends(require_internal_token)],
+)
 client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 _MIME_MAP = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+
+# Magic bytes per la validazione del tipo di file immagine.
+# Verifica i byte iniziali indipendentemente dall'estensione dichiarata dal client.
+_MAGIC_BYTES: dict[bytes, str] = {
+    b"\xff\xd8\xff": "jpg",     # JPEG
+    b"\x89PNG\r\n\x1a\n": "png",  # PNG
+    b"RIFF": "webp",             # WEBP (parziale — verificato insieme al byte 8)
+}
+
+
+def _detect_image_mime(content: bytes) -> str | None:
+    """Ritorna il mime type rilevato dai magic bytes, o None se non riconosciuto."""
+    if content[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if content[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 class OCRRequest(BaseModel):
@@ -116,8 +140,21 @@ Regole per tariffari e listini prezzi (doc_type: price_list):
 async def ocr_upload(file: UploadFile = File(...)):
     """Accetta un file immagine direttamente (jpg, png, webp) — simula il flusso WhatsApp senza URL pubblico."""
     content = await file.read()
-    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    mime = _MIME_MAP.get(ext, "image/jpeg")
+
+    # Validazione tipo file tramite magic bytes (indipendente dall'estensione dichiarata).
+    detected_mime = _detect_image_mime(content)
+    if detected_mime is None:
+        # Fallback a estensione — accettato solo se tra quelle note.
+        ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+        if ext not in _MIME_MAP:
+            raise HTTPException(
+                status_code=400,
+                detail="Tipo di file non riconosciuto. Usa JPG, PNG o WEBP.",
+            )
+        mime = _MIME_MAP[ext]
+    else:
+        mime = detected_mime
+
     data_url = f"data:{mime};base64,{base64.b64encode(content).decode()}"
 
     # Riusa esattamente la stessa logica di /ocr/image passando il data-URI come URL

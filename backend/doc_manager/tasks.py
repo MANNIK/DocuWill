@@ -1,7 +1,32 @@
+import logging
+
 import httpx
 from celery import shared_task
 from django.conf import settings
 from django.core.files.base import ContentFile
+
+logger = logging.getLogger(__name__)
+
+
+def _ai_headers() -> dict:
+    """Header di autenticazione interna verso l'ai_service (X-Internal-Token).
+    L'ai_service non è esposto sull'host; questo token è la barriera applicativa."""
+    token = getattr(settings, "AI_SERVICE_TOKEN", "")
+    return {"X-Internal-Token": token} if token else {}
+
+
+def _read_document_bytes(document, file_content):
+    """Legge i bytes del file: dallo storage del Document (nuovo flusso) o, per
+    retrocompatibilità, dalla lista di interi passata nel payload (vecchio flusso)."""
+    if document.file:
+        document.file.open("rb")
+        try:
+            return document.file.read()
+        finally:
+            document.file.close()
+    if file_content is not None:
+        return bytes(file_content)
+    raise ValueError("Nessun contenuto file disponibile per il documento.")
 
 
 @shared_task(bind=True, max_retries=3)
@@ -20,12 +45,13 @@ def process_document_task(
         document = Document.objects.get(id=document_id)
 
         if document.source == Document.SourceChoices.UPLOAD:
-            content_bytes = bytes(file_content)
+            content_bytes = _read_document_bytes(document, file_content)
 
             with httpx.Client(timeout=120) as client:
                 response = client.post(
                     f"{settings.AI_SERVICE_URL}/parse/csv",
                     files={"file": (filename, content_bytes)},
+                    headers=_ai_headers(),
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -53,11 +79,12 @@ def process_document_task(
                 find_and_reconcile(extra_doc)
 
         elif document.source == Document.SourceChoices.IMAGE:
-            content_bytes = bytes(file_content)
+            content_bytes = _read_document_bytes(document, file_content)
             with httpx.Client(timeout=120) as client:
                 response = client.post(
                     f"{settings.AI_SERVICE_URL}/ocr/upload",
                     files={"file": (filename, content_bytes)},
+                    headers=_ai_headers(),
                 )
                 response.raise_for_status()
                 parsed = response.json()
@@ -75,7 +102,14 @@ def process_document_task(
             if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
                 auth = (settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
 
-            with httpx.Client(timeout=60, follow_redirects=True) as client:
+            # Anti-SSRF (seconda barriera, oltre alla view): rivalida prima del
+            # fetch, perché follow_redirects=True potrebbe seguire un redirect
+            # verso un host interno.
+            from .utils import is_safe_external_url
+            if not is_safe_external_url(media_url):
+                raise ValueError("media_url non consentito (SSRF).")
+
+            with httpx.Client(timeout=60, follow_redirects=False) as client:
                 media_resp = client.get(media_url, auth=auth)
                 media_resp.raise_for_status()
                 media_bytes = media_resp.content
@@ -94,6 +128,7 @@ def process_document_task(
                 response = client.post(
                     f"{settings.AI_SERVICE_URL}/ocr/upload",
                     files={"file": (fname, media_bytes)},
+                    headers=_ai_headers(),
                 )
                 response.raise_for_status()
                 parsed = response.json()
@@ -108,10 +143,16 @@ def process_document_task(
         try:
             doc = Document.objects.get(id=document_id)
             doc.status = Document.StatusChoices.ERROR
-            doc.error_message = str(exc)
+            # Non esporre dettagli tecnici (path, stack, chiavi API) nella
+            # risposta API — loggare il dettaglio lato server.
+            doc.error_message = "Errore durante l'elaborazione del documento."
             doc.save()
         except Exception:
             pass
+        logger.exception(
+            "process_document_task fallito per document_id=%s: %s",
+            document_id, exc,
+        )
         raise self.retry(exc=exc, countdown=60)
 
 

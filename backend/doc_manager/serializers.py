@@ -1,5 +1,10 @@
+from django.conf import settings
 from rest_framework import serializers
 from .models import Document, DocumentRow, Reconciliation, Discrepancy, AppSettings
+
+# Estensioni accettate dal parser /parse/csv. Tutto il resto è rifiutato a monte
+# per evitare di inoltrare file ostili (script, archivi) al microservizio AI.
+ALLOWED_UPLOAD_EXTENSIONS = (".csv", ".xlsx", ".xls")
 
 
 class DocumentRowSerializer(serializers.ModelSerializer):
@@ -67,6 +72,20 @@ class DocumentSerializer(serializers.ModelSerializer):
 class DocumentUploadSerializer(serializers.Serializer):
     """Usato solo per l'upload del file — non un ModelSerializer."""
     file = serializers.FileField()
+
+    def validate_file(self, value):
+        max_size = getattr(settings, "MAX_UPLOAD_SIZE", 10 * 1024 * 1024)
+        if value.size > max_size:
+            mb = max_size // (1024 * 1024)
+            raise serializers.ValidationError(
+                f"File troppo grande (max {mb} MB)."
+            )
+        name = (value.name or "").lower()
+        if not name.endswith(ALLOWED_UPLOAD_EXTENSIONS):
+            raise serializers.ValidationError(
+                "Formato non supportato. Usa CSV, XLSX o XLS."
+            )
+        return value
 
 
 class DiscrepancySerializer(serializers.ModelSerializer):
@@ -148,7 +167,7 @@ class ReconciliationUpdateSerializer(serializers.ModelSerializer):
 class AppSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = AppSettings
-        fields = ["whatsapp_provider", "ocr_engine", "match_threshold", "fuzzy_threshold", "updated_at"]
+        fields = ["whatsapp_provider", "ocr_engine", "match_threshold", "fuzzy_threshold", "daily_document_quota", "updated_at"]
         read_only_fields = ["updated_at"]
 
 

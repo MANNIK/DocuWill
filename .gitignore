@@ -1,5 +1,6 @@
 .env.backend
 .env.frontend
+.env.ai
 __pycache__/
 *.pyc
 .next/

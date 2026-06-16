@@ -4,6 +4,19 @@ from rest_framework.test import APIClient
 from django.contrib.auth.models import User
 
 
+@pytest.fixture(autouse=True)
+def clear_throttle_cache():
+    """
+    Svuota la cache DRF (throttle counters) prima di ogni test.
+    Impedisce che i contatori accumulati da test precedenti facciano scattare
+    il rate limit su un test successivo (es. 3 register test → 429 sul 4°).
+    Safe: nei test non vengono popolate cache persistenti (embedding, col-map)
+    perché le chiamate AI sono tutte mockkate.
+    """
+    from django.core.cache import cache
+    cache.clear()
+
+
 @pytest.fixture
 def api_client():
     return APIClient()

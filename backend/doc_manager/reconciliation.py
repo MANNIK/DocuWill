@@ -282,12 +282,25 @@ def serialize_document_for_claude(doc: Document) -> dict:
     }
 
 
+# Tipi di documento SEMPRE non-standard, a prescindere da item_code.
+# Un tariffario (price_list) arrivato via OCR ha item_code costruito artificialmente
+# dal parser (es. "ZONA-A-0.5-1.0"): senza questo controllo verrebbe trattato come
+# standard e instradato sul percorso sbagliato. Fonte di verità unica: usata sia da
+# is_standard_document sia (concettualmente) da tariff_reconciliation.
+_NONSTANDARD_DOC_TYPES = {"price_list"}
+
+
 def is_standard_document(doc: Document) -> bool:
     """
     Un documento è 'standard' se la maggioranza delle righe ha item_code
     (codice prodotto, SKU, codice paese, nome servizio).
     I tariffari hanno unit_price ma non item_code → non-standard.
+
+    Il doc_type ha priorità sulla presenza di item_code: un tariffario via OCR
+    ha item_code artificiali, ma deve usare comunque il percorso non-standard.
     """
+    if doc.doc_type in _NONSTANDARD_DOC_TYPES:
+        return False
     rows = list(doc.rows.all())
     if not rows:
         return True
@@ -552,8 +565,20 @@ def claude_reconcile(doc1: Document, doc2: Document) -> tuple[list[dict], int]:
     both_standard = is_standard_document(doc1) and is_standard_document(doc2)
 
     if not both_standard:
+        from .tariff_reconciliation import reconcile_nonstandard
+
+        def _gpt_residuo(rows1_unmatched, rows2_unmatched):
+            # Fallback GPT solo quando i formati sono troppo divergenti
+            # (es. un doc è CSV e l'altro è OCR con struttura diversa).
+            # level2_full_semantic rimane come safety net.
+            if not rows1_unmatched and not rows2_unmatched:
+                return []
+            return level2_full_semantic(doc1, doc2)
+
         try:
-            discrepancies = level2_full_semantic(doc1, doc2)
+            discrepancies = reconcile_nonstandard(
+                doc1, doc2, gpt_fallback=_gpt_residuo
+            )
         except Exception as e:
             discrepancies = [{
                 "type": "description_mismatch",
@@ -561,7 +586,7 @@ def claude_reconcile(doc1: Document, doc2: Document) -> tuple[list[dict], int]:
                 "value_doc1": "",
                 "value_doc2": "",
                 "severity": "info",
-                "note": f"Analisi semantica non disponibile: {str(e)}",
+                "note": f"Confronto non disponibile: {str(e)}",
             }]
         return discrepancies, 0
 
@@ -703,10 +728,41 @@ def compute_match_score(doc_a: Document, doc_b: Document) -> int:
     return min(score, 100)
 
 
+# Numero massimo di candidati da valutare con are_documents_complementary (chiamata
+# GPT). Senza questo cap, `find_and_reconcile` sarebbe O(N) rispetto ai documenti nel
+# DB → costo LLM crescente. Con 25 candidati il matching rimane O(1) ammortizzato:
+# il candidato corretto condivide fornitore/numero e viene trovato nel prefiltro.
+MAX_RECON_CANDIDATES = 25
+
+
 def find_and_reconcile(new_doc: Document):
-    candidates = Document.objects.filter(
+    # Prefiltro 1: priorizza documenti con stesso supplier_canonical (cheap).
+    # Torna al set completo solo se il canonical è vuoto o non dà risultati.
+    if new_doc.supplier_canonical:
+        qs = Document.objects.filter(
+            status=Document.StatusChoices.PROCESSED,
+            supplier_canonical=new_doc.supplier_canonical,
+        ).exclude(id=new_doc.id)
+    else:
+        qs = Document.objects.none()
+
+    # Prefiltro 2: aggiungi documenti recenti (ultimi 30 giorni) per catturare
+    # coppie tra fornitori con canonical leggermente diverso (normalizzazione fuzzy).
+    from django.utils import timezone as tz
+    cutoff = tz.now() - tz.timedelta(days=30)
+    qs_recent = Document.objects.filter(
         status=Document.StatusChoices.PROCESSED,
+        created_at__gte=cutoff,
     ).exclude(id=new_doc.id)
+
+    # Unione + dedup + cap: mantiene al massimo MAX_RECON_CANDIDATES candidati
+    # tra quelli per supplier e quelli recenti (in quest'ordine di priorità).
+    seen_ids: set[int] = set()
+    candidates = []
+    for doc in list(qs) + list(qs_recent):
+        if doc.id not in seen_ids and len(candidates) < MAX_RECON_CANDIDATES:
+            seen_ids.add(doc.id)
+            candidates.append(doc)
 
     best_match = None
     best_score = 0
