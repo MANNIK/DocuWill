@@ -827,8 +827,17 @@ def find_and_reconcile(new_doc: Document):
         ).exists():
             continue
 
-        # Stesso filename = duplicato caricato due volte, salta sempre
-        if candidate.original_filename == new_doc.original_filename:
+        # Duplicato: stesso contenuto (hash SHA-256) o, se hash non disponibile,
+        # stesso filename. L'hash è più preciso: due file con lo stesso nome ma
+        # contenuto diverso (es. fattura_gennaio.csv e fattura_febbraio.csv)
+        # vengono riconciliati normalmente; due file con nomi diversi ma contenuto
+        # identico (stesso file caricato due volte rinominato) vengono saltati.
+        cand_hash = (candidate.file_hash or "").strip()
+        new_hash = (new_doc.file_hash or "").strip()
+        if cand_hash and new_hash:
+            if cand_hash == new_hash:
+                continue
+        elif candidate.original_filename and candidate.original_filename == new_doc.original_filename:
             continue
 
         # Verifica duplicati per "fingerprint" — stessa coppia già riconciliata

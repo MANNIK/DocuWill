@@ -56,6 +56,8 @@ def process_document_task(
 
         if document.source == Document.SourceChoices.UPLOAD:
             content_bytes = _read_document_bytes(document, file_content)
+            import hashlib
+            document.file_hash = hashlib.sha256(content_bytes).hexdigest()
 
             with httpx.Client(timeout=120) as client:
                 response = client.post(
@@ -94,6 +96,8 @@ def process_document_task(
 
         elif document.source == Document.SourceChoices.IMAGE:
             content_bytes = _read_document_bytes(document, file_content)
+            import hashlib
+            document.file_hash = hashlib.sha256(content_bytes).hexdigest()
             with httpx.Client(timeout=120) as client:
                 response = client.post(
                     f"{settings.AI_SERVICE_URL}/ocr/upload",
@@ -128,6 +132,9 @@ def process_document_task(
                 media_resp = client.get(media_url, auth=auth)
                 media_resp.raise_for_status()
                 media_bytes = media_resp.content
+
+            import hashlib
+            document.file_hash = hashlib.sha256(media_bytes).hexdigest()
 
             content_type = media_resp.headers.get('content-type', 'image/jpeg')
             ext = content_type.split('/')[-1].split(';')[0]

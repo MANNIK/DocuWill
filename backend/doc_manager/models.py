@@ -66,6 +66,7 @@ class Document(models.Model):
 
     # File originale
     original_filename = models.CharField(max_length=255, blank=True)
+    file_hash = models.CharField(max_length=64, blank=True, db_index=True)  # SHA-256 hex del contenuto
     file_url = models.URLField(blank=True)  # URL sorgente Twilio (per audit)
     file = models.FileField(upload_to='whatsapp/%Y/%m/', blank=True, null=True)  # copia locale
 
