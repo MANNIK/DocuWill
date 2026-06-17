@@ -113,9 +113,23 @@ Il sistema previene la creazione di riconciliazioni duplicate tramite due livell
 
 La guardia 2 si attiva **solo** quando almeno uno dei due documenti ha un numero documento valorizzato (DDT-AM-2026-0318, DL-7741, ORD-2026-W07, ecc.). Se entrambi non hanno numero documento il fingerprint sarebbe troppo generico e rischierebbe di bloccare riconciliazioni legittime.
 
-### 3. Stesso filename
+### 3. Stesso contenuto (hash SHA-256) o stesso filename
 
-Se due documenti hanno lo stesso `original_filename` vengono sempre saltati, indipendentemente dal contenuto. È il caso più ovvio di duplicato.
+Il sistema calcola l'hash SHA-256 del contenuto del file nel momento in cui viene elaborato dal task Celery. L'hash viene salvato nel campo `Document.file_hash` (indicizzato).
+
+La logica di confronto è:
+
+- **Entrambi i documenti hanno hash** → confronto SHA-256. Solo se gli hash coincidono il documento è un duplicato e viene saltato.
+- **Uno o entrambi mancano di hash** (documenti caricati prima di questa feature) → fallback al confronto di `original_filename`.
+
+Questo distingue correttamente tre scenari che il solo confronto sul filename non riusciva a gestire:
+
+| Scenario | filename | hash | Esito |
+|----------|----------|------|-------|
+| Stesso file caricato due volte, stesso nome | uguale | uguale | ❌ Saltato (duplicato) |
+| Due file diversi con lo stesso nome (es. `fattura_fornitore.csv` di mesi diversi) | uguale | diverso | ✅ Riconciliati |
+| Stesso file caricato due volte, rinominato | diverso | uguale | ❌ Saltato (duplicato) |
+| Due file diversi con nomi diversi | diverso | diverso | ✅ Riconciliati (se score ≥ soglia) |
 
 ---
 
