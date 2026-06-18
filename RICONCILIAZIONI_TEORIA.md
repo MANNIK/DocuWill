@@ -147,7 +147,7 @@ Non si guarda tutto il database: si lavora su un sottoinsieme di massimo **25 ca
 
 Per ogni candidato si verificano nell'ordine:
 - Già riconciliato per ID? → salta
-- Stesso filename? → salta
+- Stesso hash SHA-256? (fallback: stesso filename se hash assente) → salta
 - Stesso fingerprint di una coppia già riconciliata? → salta
 - `are_documents_complementary()` dice no? → salta
 
@@ -250,7 +250,7 @@ Prefiltro candidati (supplier_canonical + ultimi 30gg, max 25)
        ▼
 Per ogni candidato:
   ├── già riconciliato per ID? → skip
-  ├── stesso filename? → skip
+  ├── stesso hash SHA-256? (fallback: stesso filename) → skip
   ├── stesso fingerprint coppia? → skip
   ├── are_documents_complementary()? → skip se NO
   └── compute_match_score() → tiene il migliore
