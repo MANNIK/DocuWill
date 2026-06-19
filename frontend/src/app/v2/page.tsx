@@ -152,7 +152,7 @@ export default function DashboardPage() {
               <tbody>
                 {stats.recent_documents.map((d: Document) => (
                   <tr key={d.id} style={{ cursor: 'pointer' }}
-                    onClick={() => window.location.href = (d.source === 'whatsapp' || d.source === 'image') ? '/v2/inbox' : '/v2/reconciliations'}>
+                    onClick={() => window.location.href = '/v2/documents/' + d.id}>
                     <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{d.doc_type_display}</td>
                     <td style={{ fontWeight: 500, fontSize: 12 }}>{d.supplier_name || '—'}</td>
                     <td><Pill variant={d.status === 'processed' ? 'ok' : d.status === 'error' ? 'err' : 'warn'}>{d.status_display}</Pill></td>

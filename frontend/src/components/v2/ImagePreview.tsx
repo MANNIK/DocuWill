@@ -40,7 +40,7 @@ export default function ImagePreview({ document: doc }: Props) {
           </table>
         ) : (
           <div style={{ color: 'var(--text-faint)', fontSize: 12 }}>
-            {doc.source === 'whatsapp' ? '📱 Ricevuto via WhatsApp' : '📷 Caricato localmente'} · Nessuna anteprima disponibile
+            {doc.source === 'whatsapp' ? 'Ricevuto via WhatsApp' : 'Caricato localmente'} · Nessuna anteprima disponibile
           </div>
         )}
       </div>
