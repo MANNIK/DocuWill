@@ -36,9 +36,6 @@ export default function UploadCard({ job, onRemove }: Props) {
     <div className={`q-upload-card ${statusClass}`}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span style={{ fontSize: 15, flexShrink: 0 }}>
-          {job.mode === 'image' ? '🖼' : '📄'}
-        </span>
         <span style={{ fontWeight: 500, fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text)' }}>
           {job.file.name}
         </span>

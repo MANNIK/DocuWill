@@ -155,7 +155,7 @@ export default function InboxPage() {
                     {m.supplier_name || m.original_filename || `Messaggio #${m.id}`}
                   </div>
                   <div style={{ fontSize: 11, color: selected?.id === m.id ? 'var(--accent-ink)' : 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {m.source === 'whatsapp' ? '📱 WhatsApp' : '📷 Immagine caricata'} · {fmtDate(m.created_at)}
+                    {m.source === 'whatsapp' ? 'WhatsApp' : 'Immagine caricata'} · {fmtDate(m.created_at)}
                   </div>
                 </div>
                 <Pill variant={statusToPillVariant(inboxStatus(m))} >{m.status_display}</Pill>

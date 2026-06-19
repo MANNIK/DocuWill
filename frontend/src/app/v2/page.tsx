@@ -17,7 +17,6 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('it-IT', { day: '2-digit', month: 'short' })
 }
 
-const sourceIcon: Record<string, string> = { whatsapp: '📱', image: '📷', upload: '📄' }
 
 const discTypeLabel: Record<string, string> = {
   quantity_mismatch: 'Quantità', price_mismatch: 'Prezzo', missing_in_doc2: 'Mancante doc2',
@@ -154,7 +153,7 @@ export default function DashboardPage() {
                 {stats.recent_documents.map((d: Document) => (
                   <tr key={d.id} style={{ cursor: 'pointer' }}
                     onClick={() => window.location.href = (d.source === 'whatsapp' || d.source === 'image') ? '/v2/inbox' : '/v2/reconciliations'}>
-                    <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{sourceIcon[d.source] ?? '📄'} {d.doc_type_display}</td>
+                    <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{d.doc_type_display}</td>
                     <td style={{ fontWeight: 500, fontSize: 12 }}>{d.supplier_name || '—'}</td>
                     <td><Pill variant={d.status === 'processed' ? 'ok' : d.status === 'error' ? 'err' : 'warn'}>{d.status_display}</Pill></td>
                     <td style={{ fontSize: 11, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{fmtDate(d.created_at)}</td>
