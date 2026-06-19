@@ -1,5 +1,5 @@
 # SCRIPT — Presentazione WeWill Challenge
-### Copione parola per parola · Deep dive ~35 minuti · Demo live inclusa
+### Copione parola per parola · Deep dive ~55 minuti · Demo live inclusa
 
 ---
 
@@ -10,6 +10,7 @@
 > *(nota di regia)* → istruzione tecnica, non la dici a voce
 > 📂 → file da aprire nel terminale o nell'editor
 > ❓ **[Q&A]** → risposta pronta a una domanda difficile → vedi Appendice
+> 🔬 → approfondimento tecnico profondo — puoi tagliarlo se sei a corto di tempo, ma studia queste parti: sono quelle su cui ti faranno domande difficili
 
 ---
 
@@ -44,16 +45,18 @@ in un'altra, `backend/doc_manager/models.py` in una terza. Minimizza fino a che 
 | Sezione | Durata |
 |---------|--------|
 | 1. Apertura + problema | ~3 min |
-| 2. Architettura overview | ~3 min |
+| 2. Architettura overview | ~5 min |
 | 3. DEMO 1 — Upload CSV | ~5 min |
-| 4. Area 1 — Parser universale | ~5 min |
-| 5. Area 2 — Modelli e Database | ~3 min |
-| 6. Area 3 — Coda asincrona | ~2 min |
-| 7. Area 4 — Riconciliazione a cascata | ~6 min |
+| 4. Area 1 — Parser universale | ~8 min |
+| 5. Area 2 — Modelli e Database | ~5 min |
+| 6. Area 3 — Coda asincrona + Cache | ~8 min |
+| 7. Area 4 — Riconciliazione a cascata | ~10 min |
 | 8. DEMO 2 — Riconciliazione + WhatsApp | ~4 min |
-| 9. Sicurezza | ~4 min |
+| 9. Sicurezza | ~6 min |
 | 10. Chiusura | ~1 min |
-| **Totale** | **~36 min** |
+| **Totale** | **~55 min** |
+
+> *(Nota: questo è lo script di studio completo. Per la presentazione live puoi saltare i blocchi 🔬 senza perdere il filo — ma studia comunque tutti perché sono le domande difficili.)*
 
 ---
 
@@ -81,7 +84,7 @@ in un'altra, `backend/doc_manager/models.py` in una terza. Minimizza fino a che 
 
 ---
 
-## 2 · ARCHITETTURA — PANORAMICA *(~3 min)*
+## 2 · ARCHITETTURA — PANORAMICA *(~5 min)*
 
 *(puoi mostrare il diagramma a blocchi del CLAUDE.md o RICONCILIAZIONI_TEORIA.md, o disegnarlo su lavagna)*
 
@@ -98,6 +101,14 @@ in un'altra, `backend/doc_manager/models.py` in una terza. Minimizza fino a che 
 > *"Terzo: **separazione di competenze** chiara. Django gestisce stato, autenticazione, ORM. FastAPI gestisce I/O asincrono e integrazione LLM. Ogni tecnologia fa quello per cui è ottimizzata."*
 
 > *"Ci sono poi due sistemi trasversali: **Redis**, che fa tre cose distinte in tre database logici separati — coda Celery, cache embedding, cache column mapping. E **Docker Compose**, che orchestra i sette container con un solo comando."*
+
+🔬 > *"Qualche parola in più sulle tecnologie, perché potrei usarle in modo banale — invece ogni scelta ha una ragione precisa."*
+
+🔬 > *"**Django Rest Framework**, o DRF, è un layer sopra Django che aggiunge serializzatori — classi che traducono i modelli ORM in JSON e viceversa, con validazione automatica — autenticazione pluggabile, throttling, negoziazione del content type. Senza DRF dovrei scrivere tutta quella logica a mano."*
+
+🔬 > *"**JWT — JSON Web Token**. Il modello tradizionale di autenticazione web usa sessioni server-side: login, il server crea una sessione in database o Redis, ti dà un cookie con l'ID sessione, ogni request verifica quel ID. Funziona ma non scala orizzontalmente — tutti i server devono condividere lo stesso store sessioni. JWT inverte il modello: il server crea un token firmato crittograficamente con una chiave segreta, che contiene i claim dell'utente — user_id, exp, iat. Il client lo manda nell'header Authorization. Il server verifica la firma matematicamente, senza toccare il database. È stateless: qualsiasi istanza del backend può verificare qualsiasi token. Il rovescio è che non si può revocare un token prima della scadenza — per questo ho token di accesso corti, quindici minuti, con refresh token separato che viene ruotato e può essere blacklistato."*
+
+🔬 > *"**Celery con Redis come broker**. L'alternativa a Celery per operazioni lente è usare thread Django. Il problema dei thread è che condividono memoria — race condition — e Python ha il GIL, il Global Interpreter Lock, che impedisce vera parallelizzazione CPU-bound. Celery usa processi separati, ognuno con il proprio interprete, memoria isolata, senza GIL. Redis come broker è una lista FIFO in memoria: `.delay()` serializza i parametri in JSON e fa RPUSH sulla lista `celery`. Il worker fa BLPOP — blocking pop — che dorme finché non arriva un job, lo prende, lo esegue in isolamento. Un crash del job non tocca gli altri worker."*
 
 ---
 
@@ -127,7 +138,7 @@ in un'altra, `backend/doc_manager/models.py` in una terza. Minimizza fino a che 
 
 ---
 
-## 4 · AREA 1 — IL PARSER UNIVERSALE *(~5 min)*
+## 4 · AREA 1 — IL PARSER UNIVERSALE *(~8 min)*
 
 📂 *(apri `ai_service/routers/csv_parser.py` nell'editor)*
 
@@ -146,51 +157,77 @@ if "qty" in header.lower() or "quantità" in header.lower() or "menge" in header
 
 > *"La scelta che ho fatto è diversa: **dare a GPT-4o le prime cinquanta righe come testo tabellare** e chiedergli di capire la struttura. Non il contenuto — la struttura. Guardate come viene trasformato un file:"*
 
-> *"Ogni riga diventa una stringa del tipo 'Riga 4: FRN-045 | Multifunktionsbord | 50 | 97,09'. GPT vede questo testo e risponde con un JSON preciso: qual è l'indice della riga di intestazione, quali sono le righe di dati, quale colonna mappa su 'item_code', quale su 'quantity', chi è il fornitore, che tipo di documento è. Temperature zero — output il più deterministico possibile."*
+> *"Ogni riga diventa una stringa del tipo 'Riga 4: FRN-045 | Multifunktionsbord | 50 | 97,09'. GPT vede questo testo e risponde con un JSON preciso: qual è l'indice della riga di intestazione, quali sono le righe di dati, quale colonna mappa su 'item_code', quale su 'quantity', chi è il fornitore, che tipo di documento è."*
+
+🔬 > *"Una scelta specifica che ha impatto enorme: **temperature zero**. GPT genera testo campionando dalla distribuzione di probabilità sui token possibili. A temperature 1, campiona in modo stocastico — la stessa prompt può dare risposte diverse. A temperature zero, si prende sempre il token con probabilità più alta — è praticamente deterministico. Per output strutturato come JSON, temperature zero è l'unica scelta sensata: voglio che lo stesso file processato domani dia lo stesso column_mapping di oggi."*
+
+🔬 > *"**AsyncOpenAI invece di OpenAI**. FastAPI è costruito su asyncio — event loop singolo che gestisce migliaia di richieste concorrenti con coroutine. Se usassi il client OpenAI sincrono, la chiamata a GPT bloccherebbe l'intero event loop per tutta la durata — cinque, dieci secondi — e nessun'altra richiesta potrebbe essere gestita. AsyncOpenAI usa `await` per cedere il controllo all'event loop mentre aspetta la risposta di GPT. In pratica: con venti upload simultanei, AsyncOpenAI gestisce tutti e venti in parallelo con un solo thread. Il client sincrono li processava in serie."*
+
+🔬 > *"**Pre-segmentazione in Python, prima di GPT**. Il parser ha una funzione `table_segmentation()` che analizza le righe del CSV in Python puro, senza chiamare GPT, per rilevare se ci sono più tabelle: guarda se il numero di colonne cambia bruscamente tra righe consecutive, o se ci sono righe completamente vuote che separano sezioni. Se il file ha una sola tabella continua, questa fase è O(N) ma zero costo API. Solo quando rileva potenziali sezioni multiple passa quel contesto a GPT."*
 
 > *"Ma attenzione: GPT vede **solo cinquanta righe** per capire la struttura. Il file più grande della challenge ha 564 righe. Come le estraiamo tutte? Python prende il `column_mapping` restituito da GPT e lo applica autonomamente a tutto il file, senza ulteriori chiamate API. Nessun costo aggiuntivo, nessuna latenza aggiuntiva."*
 
+🔬 > *"**Parsing numeri in formato europeo**. Il CSV ha '1.234,56' — punto come separatore migliaia, virgola come decimale. La funzione `parse_number()` non usa regex generiche. Algoritmo: conto le occorrenze di punto e virgola. Se trovo solo virgola, è il decimale — '97,09' diventa 97.09. Se trovo entrambi, il separatore decimale è l'ultimo — '1.234,56': l'ultimo separatore è la virgola, quindi il punto è il separatore migliaia, risultato 1234.56. Funziona anche con il formato anglosassone '1,234.56' per simmetria."*
+
 > *"C'è anche il caso **multi-sezione**: il file `04-multi-table.csv` contiene ordini di due fornitori diversi nello stesso CSV. GPT lo rileva e restituisce due sezioni. Il sistema crea due documenti separati nel database, uno per fornitore. Questo gestisce il caso reale in cui un operatore esporta tutti gli ordini del giorno in un unico file."*
+
+🔬 > *"**Cap MAX_SECTIONS=20**. Se un attaccante costruisce un file CSV ad arte con cinquecento sezioni, potrebbe creare cinquecento Document nel database con una sola chiamata API — amplificazione di risorse via LLM. Il cap a venti sezioni spezza questo vettore. Se GPT restituisce ventuno sezioni, le ultime vengono scartate."*
+
+🔬 > *"**Perché split manuale e non pandas.read_csv**. Il parser legge il file riga per riga con `content.split('\\n')`, manualmente. Se usassi pandas con `header=None`, pandas normalizza tutte le righe alla stessa lunghezza del numero massimo di colonne, aggiunge NaN, e perde completamente le righe 'malformate' — che in realtà sono i titoli di sezione come 'Ordini dalla settimana 7'. Quelle righe sono fondamentali per capire la struttura di un file multi-sezione. Lo split manuale le preserva intatte."*
 
 > *"Ogni riga estratta viene salvata con **due rappresentazioni**. I sette campi normalizzati — item_code, description, quantity, unit, unit_price, total_price, discount — sono indicizzati, veloci, usati per il confronto matematico. E poi c'è il campo `raw_data` in formato JSONB PostgreSQL, che contiene tutti i valori originali con i nomi reali delle colonne del CSV. Questo è fondamentale per i documenti non-standard come i tariffari, dove le colonne si chiamano 'Zona A Express €' o 'Supplemento carburante' — cose che non si mappano nei sette campi standard ma che GPT deve comunque confrontare."*
 
-> *"E infine: il parser non usa mai pandas.read_csv con header automatico. Legge il file riga per riga, manualmente, per non perdere le righe 'malformate' che in realtà sono i titoli di sezione. Un dettaglio che fa la differenza su file reali."*
-
 ---
 
-## 5 · AREA 2 — MODELLI E DATABASE *(~3 min)*
+## 5 · AREA 2 — MODELLI E DATABASE *(~5 min)*
 
 📂 *(apri `backend/doc_manager/models.py` — oppure mostra Django admin con i documenti caricati)*
 
 > *"Il database è PostgreSQL 16, con quattro modelli principali."*
 
-> *"**Document** è il file caricato: tipo documento, fornitore normalizzato, numero, data, importo. Ha un campo `supplier_canonical` — il nome fornitore normalizzato con rimozione di suffissi societari come S.r.l., GmbH, Ltd, e fuzzy matching con rapidfuzz per agganciare varianti dello stesso nome. 'Alfa Forniture S.r.l.' e 'ALFA FORNITURE SRL' finiscono nello stesso canonical. Ha anche `file_hash`, lo SHA-256 del contenuto — ci torno."*
+> *"**Document** è il file caricato: tipo documento, fornitore normalizzato, numero, data, importo. Ha un campo `supplier_canonical` — il nome fornitore normalizzato con rimozione di suffissi societari e fuzzy matching. Ha anche `file_hash`, lo SHA-256 del contenuto — ci torno."*
+
+🔬 > *"**Come funziona `supplier_canonical`**. Quando un documento viene parsato, il task Celery chiama `canonical_supplier_name()`. Questa funzione scarica dal database la lista di tutti i canonical già esistenti. Per ogni canonical, calcola con rapidfuzz — una libreria C compilata, molto più veloce di Levenshtein Python puro — la similarità tra il nuovo nome fornitore e il canonical esistente, dopo aver rimosso i suffissi societari: S.r.l., GmbH, Ltd, AB, S.p.A., LLC, e una ventina di altre varianti internazionali. 'Alfa Forniture S.r.l.' diventa 'Alfa Forniture', 'ALFA FORNITURE SRL' diventa 'ALFA FORNITURE', la similarità tra le due è 100%. Se la similarità è sopra l'85%, il nuovo fornitore usa il canonical esistente. Altrimenti ne crea uno nuovo. Risultato: tutti i documenti dello stesso fornitore, anche con nomi leggermente diversi, hanno lo stesso `supplier_canonical` — fondamentale per il matching."*
+
+🔬 > *"**Niente tabella Supplier separata**. I fornitori non hanno una tabella propria — sono campi su Document. La 'lista fornitori' che si vede nella dashboard è una vista derivata: `Document.objects.values('supplier_canonical').annotate(count=Count('id'))` — una GROUP BY SQL. Vantaggi: niente migration aggiuntiva, niente foreign key da mantenere, niente sync tra tabelle. Il svantaggio è che un fornitore 'esiste' solo se ha almeno un documento. Per questo use case è perfetto."*
+
+🔬 > *"**KEEP IN SYNC**. La logica di normalizzazione fornitore — la funzione `_normalize_for_match` e la lista `_COMPANY_SUFFIXES` — esiste in due posti: `backend/doc_manager/utils.py` e `ai_service/utils/supplier.py`. Devono essere identiche. Il motivo: entrambi costruiscono la stessa chiave Redis per la cache column mapping — `col_map:<md5(supplier_canonical)[:12]>:<md5(headers)[:12]>`. Se la normalizzazione divergesse, Django e FastAPI costruirebbero chiavi diverse e la cache non funzionerebbe mai. Questo è documentato con un commento `# KEEP IN SYNC` in entrambi i file."*
 
 > *"**DocumentRow** è una singola riga di dati: i sette campi normalizzati più il `raw_data` JSONB."*
+
+🔬 > *"**JSONB vs colonne fisse**. JSONB è JSON binario in PostgreSQL — pre-parsato, compresso, indicizzabile. Il vantaggio su colonne fisse: posso fare query arbitrarie sui campi interni. `WHERE raw_data->>'Zona A Express €' = '4.90'` funziona senza aggiungere colonne. Vs JSON testuale: JSONB è più veloce in lettura perché il parsing è già fatto, ma leggermente più lento in scrittura. E posso aggiungere un indice GIN per ricerche full-text sul contenuto JSON. Vs NoSQL: ho le garanzie ACID di PostgreSQL per i dati critici — le riconciliazioni non possono essere parziali — e JSONB per la flessibilità dove serve."*
 
 > *"**Reconciliation** è il collegamento tra due documenti: doc1 e doc2, lo status di revisione, un confidence score da zero a cento, e la lista delle discrepanze trovate."*
 
 > *"**Discrepancy** è una singola differenza: il tipo di discrepanza, i valori nei due documenti, la severity — errore bloccante, warning o informazione — e il campo `llm_suggestion` dove GPT spiega in linguaggio naturale cosa potrebbe significare quella differenza."*
 
-> *"Perché PostgreSQL con JSONB invece di un database NoSQL? Perché JSONB permette query sui campi JSON: posso cercare tutti i documenti dove `raw_data->>'Standard €' = '4.90'` senza doverlo normalizzare prima. E ho le garanzie di un database relazionale — transazioni ACID, foreign key — per i dati critici come le riconciliazioni."*
-
 ---
 
-## 6 · AREA 3 — LA CODA ASINCRONA *(~2 min)*
+## 6 · AREA 3 — LA CODA ASINCRONA E LE CACHE *(~8 min)*
 
 > *"Quando carichi un CSV, il parsing con GPT-4o richiede da cinque a trenta secondi. Se Django aspettasse il risultato prima di rispondere, il browser rimarrebbe bloccato. La soluzione è la coda asincrona."*
 
 > *"Funziona come un ristorante: il cameriere prende l'ordine — Django risponde 202 — e passa la comanda in cucina — il job va nella coda Celery. Tu non aspetti in piedi che cucinino. Vai al tavolo, il frontend continua a funzionare, e il cameriere torna da te quando è pronto."*
 
-> *"Redis gestisce tre cose completamente separate con tre database logici distinti. DB zero è la coda Celery — i job da eseguire e i risultati. DB uno è la cache degli embedding — i vettori numerici float che rappresentano il significato delle descrizioni degli articoli, usati per il matching semantico. DB due è la cache dei column mapping — per ogni fornitore, il mapping tra le colonne del CSV e i campi del sistema, con TTL di trenta giorni."*
+> *"Redis gestisce tre cose completamente separate con tre database logici distinti. Ve li spiego uno per uno."*
 
-> *"Se Redis crasha e riparte, si perde solo la cache — i dati reali sono in PostgreSQL e vengono ricostruiti automaticamente. Il sistema è progettato per sopravvivere ai crash dei componenti."*
+🔬 > *"**Redis DB 0 — broker Celery**. Quando il task viene schedulato con `.delay()`, Celery serializza i parametri in JSON e fa RPUSH sulla lista `celery` nel Redis DB 0. Il worker fa BLPOP — blocking pop — che dorme aspettando il prossimo elemento. Appena arriva il job, lo preleva, lo deserializza, e lo esegue. I risultati del task vengono salvati con chiave `celery-task-meta-<uuid>` nello stesso DB 0, con TTL di un giorno. Questo permette al frontend di fare polling sullo status del task con `GET /api/documents/<id>/` — Django legge lo status dal modello Document, aggiornato dal worker al completamento."*
 
-> *"Il retry è intelligente: Celery riprova automaticamente fino a tre volte con sessanta secondi di pausa, ma **solo per errori transitori** — timeout di rete, connessione rifiutata. Se GPT restituisce JSON malformato, quello è un errore permanente: il documento finisce in stato 'error' direttamente, senza sprecare due ulteriori retry inutili."*
+🔬 > *"**Redis DB 1 — cache embedding**. Questo è il sistema più interessante. Spiego il problema: nell'engine di riconciliazione, devo confrontare il fornitore del documento appena caricato con tutti i candidati nel database. Se ho duecento documenti da venti fornitori diversi, ho al massimo venti nomi fornitore unici. Ma se calcolo la similarity per ogni coppia documento-candidato individualmente, chiamo OpenAI O(N) volte per ogni nuovo documento — e N cresce. Con la cache, ogni nome fornitore viene calcolato una volta sola e riutilizzato infinite volte."*
+
+🔬 > *"La funzione `_embed(text)` implementa una **cascata a tre livelli**. Livello uno: dizionario Python in-process `_local_cache`, lookup O(1), zero I/O, sub-microsecondo. Questo dict è bounded — limitato a cinquemila voci. Perché il limite? Un sistema long-running con migliaia di fornitori unici riempirebbe progressivamente la RAM del worker senza mai liberarla — memory leak lento ma reale. Quando si supera il limite, viene eliminata una voce casuale. Livello due: Redis DB 1, chiave `emb:<testo>` con TTL di ventiquattro ore, condiviso tra tutti i worker Celery. Se worker A ha calcolato l'embedding di 'Nordic Design AB' e lo ha messo in Redis, worker B lo trova in Redis senza chiamare OpenAI. Livello tre: solo se miss su entrambi i livelli precedenti, si chiama l'API OpenAI `text-embedding-3-small`, che restituisce un vettore di millequinquecentotrentasei float che rappresenta il significato semantico del testo. Si mette in cache su entrambi i livelli e si ritorna."*
+
+🔬 > *"**Fail-soft totale**. Ogni punto del codice che usa Redis o OpenAI per gli embedding è wrappato in try-except. `_get_redis()` ritorna None se la connessione fallisce — mai un'eccezione. `_get_openai_client()` stessa cosa. Se Redis è giù, si salta al livello tre. Se anche OpenAI è giù, `_embed()` ritorna None e il componente fornitore del match score vale zero — la riconciliazione non crasha, degrada gracefully. Lazy init: né il client Redis né il client OpenAI vengono creati al boot del worker. Vengono creati al primo uso, in modo che un Redis non ancora pronto all'avvio non impedisca il boot."*
+
+🔬 > *"**Cosine similarity in Python puro**, senza numpy. La formula è: prodotto scalare dei due vettori diviso per il prodotto delle loro norme. `dot = sum(a*b for a,b in zip(v1, v2))`. `norm = math.sqrt(sum(x*x for x in v))`. Il risultato è un numero tra zero e uno: uno significa vettori identici, zero significa non correlati. Su vettori da millequinquecentotrentasei float, questo richiede circa un decimo di millisecondo su hardware moderno. Perché non numpy? Meno dipendenze nel microservizio di riconciliazione, che è il backend Django — numpy è una dipendenza grossa e non serve per nient'altro."*
+
+🔬 > *"**Redis DB 2 — cache column mapping**. Questo è il secondo sistema di cache. Quando GPT analizza un CSV e capisce la struttura — 'la colonna tre è quantity, la colonna cinque è unit_price' — quel mapping viene salvato in Redis DB 2 con una chiave composita: `col_map:<MD5 del supplier_canonical>:<MD5 degli header ordinati>`. TTL: trenta giorni. Ragionamento: un fornitore di solito non cambia il formato del CSV in un mese. Se lo cambia, gli header cambiano, la chiave è diversa, cache miss automatico, GPT ricalcola. La prossima volta che arriva un file dello stesso fornitore con gli stessi header, il parser trova il mapping già pronto in Redis e salta la chiamata GPT per la struttura. Zero costo, zero latenza. Nota onesta: la lettura pre-GPT funziona solo se il nome fornitore è dichiarato esplicitamente nelle prime dieci righe del file grezzo — tipo 'Fornitore: Nordic Design AB'. Se non è lì, non sappiamo a quale mapping cercare prima di aver chiamato GPT. Ma la scrittura post-GPT funziona sempre, quindi la cache si popola per tutti i fornitori."*
+
+> *"Il retry è intelligente: Celery riprova automaticamente fino a tre volte con sessanta secondi di pausa, ma **solo per errori transitori** — timeout di rete, connessione rifiutata, 5xx dal microservizio. Se GPT restituisce JSON malformato, quello è un errore permanente: il documento finisce in stato 'error' direttamente, senza sprecare due ulteriori retry inutili e senza ritardare il feedback all'utente."*
 
 ---
 
-## 7 · AREA 4 — LA RICONCILIAZIONE A CASCATA *(~6 min)*
+## 7 · AREA 4 — LA RICONCILIAZIONE A CASCATA *(~10 min)*
 
 📂 *(apri `backend/doc_manager/reconciliation.py`)*
 
@@ -198,7 +235,7 @@ if "qty" in header.lower() or "quantità" in header.lower() or "menge" in header
 
 > *"Prima di riconciliare, il sistema deve trovare il miglior candidato: tra tutti i documenti nel database, qual è quello più probabile che formi una coppia sensata col documento appena caricato? Si calcola un **match score** composito da zero a cento."*
 
-> *"Stesso numero documento: più cinquanta punti — è il segnale più forte. Stesso fornitore per embedding similarity sopra l'ottantotto percento: più trenta. Stessa data: più dieci. Totali simili: più cinque o dieci. E overlap degli articoli misurato con l'indice di Jaccard — l'intersezione diviso l'unione dei codici articolo — fino a più quaranta. Soglia minima per tentare la riconciliazione: trenta punti. Sotto quella soglia, i documenti non hanno abbastanza in comune."*
+🔬 > *"**Match score campo per campo — i numeri reali**. Stesso numero documento: più cinquanta punti — è il segnale più forte, quasi certezza. Stesso fornitore misurato con cosine similarity degli embedding: se la similarity è sopra ottantotto percento, più trenta punti — stesso fornitore; se è sopra settantadue percento, più quindici — probabilmente lo stesso fornitore con variante di nome. Stessa data: più dieci. Totali simili: se la differenza percentuale è sotto l'uno percento, più dieci; sotto il cinque percento, più cinque. E overlap degli articoli misurato con l'**indice di Jaccard** — intersezione diviso unione degli insiemi di item_code. Jaccard sopra il settanta percento: più quaranta punti; sopra il quaranta: più venticinque; sopra il dieci: più dieci. Soglia minima: trenta punti. Un documento con solo il fornitore in comune — quindici punti — e qualche articolo condiviso — dieci punti — non supera la soglia: non si tenta la riconciliazione perché le probabilità di un match falso sono troppo alte."*
 
 > *"Ma prima ancora dello score, ci sono le **guardie di esclusione**. Si salta un candidato se esiste già una riconciliazione tra quei due documenti. Si salta se il confronto SHA-256 del contenuto dei file coincide — significa che è lo stesso file caricato due volte, eventualmente rinominato. Si salta se la coppia ha già un fingerprint identico nel database — stesso tipo, stesso fornitore, stesso numero documento. E si salta se GPT, interrogato sulla compatibilità dei tipi, dice che la coppia non ha senso — un ordine con un altro ordine dello stesso fornitore non si riconcilia, sono due acquisti distinti."*
 
@@ -216,13 +253,17 @@ if "qty" in header.lower() or "quantità" in header.lower() or "menge" in header
 
 > *"**Livello 1 — confronto matematico**. Ogni documento viene indicizzato per item_code. Per ogni codice nel doc1, si cerca il corrispondente nel doc2. Se i valori numerici coincidono: ok. Se differiscono: discrepanza. Se l'articolo manca completamente nel doc2: 'missing_in_doc2', severity error."*
 
-> *"Due ottimizzazioni qui. Il **fuzzy match su item_code**: 'FRN-001' e 'FRN001' sono lo stesso articolo scritto in modo diverso. Il SequenceMatcher calcola una similarità del 92% sopra la soglia del 90% — vengono abbinati con un warning 'code_mismatch', non un errore. Il **fallback embedding**: se i codici sono troppo diversi ma le descrizioni sono simili — 'Apple Juice 1L' e 'Succo di Mela 1 litro' — si calcola la cosine similarity dei vettori embedding di OpenAI. Sopra 88%: stesso articolo, abbinamento con nota."*
+🔬 > *"**Fuzzy match su item_code — `_fuzzy_find`**. Prima del fallback embedding, c'è un fuzzy match sui codici articolo usando `SequenceMatcher` della libreria standard `difflib`. La formula è: `2 * M / T` dove M è il numero di caratteri comuni nelle sequenze allineate e T è il totale dei caratteri nelle due stringhe. 'FRN-001' ha sette caratteri, 'FRN001' ne ha sei, i caratteri comuni sono F, R, N, 0, 0, 1 — sei. `2*6 / (7+6) = 12/13 = 0.923`. La soglia è 0.9. 'FRN-001' e 'FRN001' vengono abbinati come stesso articolo, con un warning 'code_mismatch' per registrare la differenza di formato. Perché la soglia 0.9 e non, che so, 0.85? Ho testato con i file della challenge: la soglia 0.9 prende le varianti di formato reali senza falsi positivi — 'FRN-001' e 'GRN-001' darebbero 0.857, che è sotto la soglia, quindi vengono correttamente trattati come articoli diversi."*
+
+🔬 > *"**Fallback embedding su descrizione**. Se dopo il fuzzy match sull'item_code non si trova corrispondenza, il livello 1 non si arrende: calcola l'embedding della descrizione testuale di doc1 e della descrizione di doc2, e misura la cosine similarity. Se è sopra il 88%: stesso articolo descritto in modo diverso, abbinamento con nota 'description_match_via_embedding'. Questo gestisce il caso reale in cui un fornitore cambia il codice articolo tra ordine e fattura ma mantiene la descrizione."*
+
+🔬 > *"**`_compare_rows` — quali campi danno error e quali warning**. Trovata la coppia di righe corrispondenti, il sistema le confronta campo per campo. `quantity` e `unit_price`: tolleranza 0.001, ovvero lo 0.1% — discrepanze reali danno severity error. `unit` di misura: discrepanza dà severity warning — 'pz' vs 'pezzi' è probabilmente lo stesso. `discount` e `total_price`: tolleranza 0.001, severity warning — il totale potrebbe differire per arrotondamento. Perché la tolleranza 0.001? Floating point: `8155.65 * 1.0 = 8155.650000000001` in IEEE 754 — senza tolleranza, questo darebbe una discrepanza falsa su ogni riga."*
 
 > *"Se il livello 1 non trova nessuna discrepanza, la riconciliazione viene **auto-approvata immediatamente**. Zero chiamate GPT. Zero costo."*
 
 > *"**Livello 2 — validazione semantica**. Ci sono discrepanze. Ma prima di segnalarle come errori reali, chiediamo a GPT se sono davvero problemi o solo differenze di rappresentazione. E qui c'è l'ottimizzazione fondamentale: **GPT non vede mai tutto il documento**. Riceve solo le righe coinvolte nelle discrepanze. Se un documento ha cento righe e tre hanno discrepanze, GPT vede solo quelle tre. Su file da cinquecento righe, questo è un risparmio del novantasei percento di token. GPT può declassare severity da error a warning — per esempio se riconosce che i codici articolo sono formattati diversamente ma rappresentano la stessa cosa — oppure può aumentare la confidence della coppia se trova la corrispondenza particolarmente coerente."*
 
-> *"Per i documenti non-standard come i tariffari, il livello 1 non funziona — non ci sono item_code, i prezzi sono in colonne dinamiche tipo 'Zona A Express €'. In questo caso si salta il livello 1 e si manda il raw_data completo a GPT, che capisce la struttura matriciale e confronta le celle corrispondenti."*
+> *"Per i documenti non-standard come i tariffari, il livello 1 non funziona — non ci sono item_code, i prezzi sono in colonne dinamiche tipo 'Zona A Express €'. In questo caso si salta il livello 1 e si manda il `raw_data` completo a GPT, che capisce la struttura matriciale e confronta le celle corrispondenti."*
 
 > *"**Livello 3 — decisione finale**. Se dopo il livello 2 non rimane nessuna discrepanza con severity error: auto-approvato. Se rimane almeno un errore: status 'pending', l'operatore deve intervenire."*
 
@@ -258,31 +299,37 @@ if "qty" in header.lower() or "quantità" in header.lower() or "menge" in header
 
 ---
 
-## 9 · SICUREZZA *(~4 min)*
+## 9 · SICUREZZA *(~6 min)*
 
 > *"Prima di chiudere, voglio parlare di sicurezza — perché è una delle cose su cui ho lavorato di più, e su cui viene spesso trascurata nei prototipi."*
 
 > *"Ho fatto un **audit sistematico** dell'intero codebase e ho trovato e chiuso una serie di problemi. Li vado a elencare."*
 
-> *"**Autenticazione e autorizzazione**. Ogni endpoint richiede JWT valido — nessun endpoint è pubblico in produzione. Ma autenticazione non è autorizzazione. Ho implementato **autorizzazione object-level per-utente**: ogni utente vede e modifica solo i propri documenti e le proprie riconciliazioni. Il filtro `created_by=request.user` è in ogni `get_queryset`. Se provi a fare GET su un documento di un altro utente, ricevi 404 — non 403, perché il 403 rivelerebbe l'esistenza della risorsa. Gli utenti staff vedono tutto. Gli endpoint amministrativi come le impostazioni globali e la pulizia cache richiedono `IsAdminUser`."*
+> *"**Autenticazione e autorizzazione**. Ogni endpoint richiede JWT valido — nessun endpoint è pubblico in produzione. Ma autenticazione non è autorizzazione. Ho implementato **autorizzazione object-level per-utente**: ogni utente vede e modifica solo i propri documenti e le proprie riconciliazioni. Il filtro `created_by=request.user` è in ogni `get_queryset`. Se provi a fare GET su un documento di un altro utente, ricevi 404."*
+
+🔬 > *"**Perché 404 e non 403**? Il 403 Forbidden rivela tre cose: l'endpoint esiste, una risorsa con quell'ID esiste, e tu non puoi accederci. Con questa informazione, un attaccante può enumerare quali ID esistono nel sistema facendo richieste a caso — un ID che restituisce 403 esiste, uno che restituisce 404 no. Il 404 non distingue tra 'non esiste' e 'esiste ma non è tuo' — nessuna informazione trapela. Gli utenti staff vedono tutto. Gli endpoint amministrativi richiedono `IsAdminUser`."*
 
 > *"**Rate limiting scoped**. Non ho messo throttle globale — avrebbe bloccato il polling della dashboard in meno di un minuto. Ho throttle chirurgici: dieci upload al minuto per utente, cinque registrazioni all'ora per IP, sessanta webhook al minuto per IP. Il throttle login previene il brute force su `POST /api/auth/token/`."*
 
 > *"**JWT hardening**. Il token di accesso dura quindici minuti. Il refresh token viene ruotato ad ogni uso — se qualcuno intercetta un refresh token già usato, il sistema lo rigetta. Il logout chiama un endpoint che mette il refresh token nella blacklist lato server — prima fare logout non serviva a niente."*
 
-> *"**SSRF — Server Side Request Forgery**. Se un attaccante manda un messaggio WhatsApp con un link immagine che in realtà punta a `169.254.169.254` — l'endpoint dei metadati di AWS — il sistema deve bloccarlo. `is_safe_external_url()` risolve il DNS e rifiuta qualsiasi IP privato, loopback, o link-local. E non si seguono i redirect — un redirect potrebbe aggirare il controllo iniziale."*
+> *"**SSRF — Server Side Request Forgery**. Se un attaccante manda un messaggio WhatsApp con un link immagine che in realtà punta a `169.254.169.254` — l'endpoint dei metadati di AWS — il sistema deve bloccarlo."*
 
-> *"**FastAPI non è esposto**. La porta 8001 è visibile solo all'interno della rete Docker. Django deve presentare un token segreto nell'header `X-Internal-Token` per poter parlare con FastAPI. Il confronto del token usa `hmac.compare_digest` — confronto a tempo costante — per prevenire timing attacks. E se il token non è configurato, il sistema fa fail-closed: rifiuta la richiesta, non la lascia passare silenziosamente."*
+🔬 > *"La mitigazione SSRF è a tre strati. Primo: validazione del formato URL — deve essere http o https, non file://, gopher://, o altri schemi. Secondo: `is_safe_external_url()` risolve il DNS in Python e controlla che l'IP risultante non sia in range privati — 10.x, 192.168.x, 172.16-31.x, 127.x, il link-local 169.254.x, IPv6 loopback e link-local. Terzo, e cruciale: `follow_redirects=False`. Senza questa opzione, un redirect da un URL inizialmente valido verso `http://169.254.169.254/` bypasserebbe tutti i controlli precedenti. Con `follow_redirects=False`, il sistema fa una sola richiesta HTTP e si ferma — i redirect non vengono seguiti."*
 
-> *"**Validazione dei file**. Il serializer Django controlla estensione e dimensione — massimo dieci megabyte. Ma questo non basta: l'estensione la dichiara l'utente. Il microservizio FastAPI controlla i **magic bytes** — i primi byte del file che identificano il formato reale indipendentemente dal nome. Un file `.png` con header PDF viene rifiutato."*
+> *"**FastAPI non è esposto**. La porta 8001 è visibile solo all'interno della rete Docker. Django deve presentare un token segreto nell'header `X-Internal-Token` per poter parlare con FastAPI."*
+
+🔬 > *"**compare_digest e timing attack**. Un confronto normale `token_a == token_b` in Python esce al primo carattere diverso — se il token corretto inizia con 'abc' e tu provi 'xyz', l'uscita è immediata; se provi 'abd', ci vuole un microsecondo in più. Un attaccante che può misurare il tempo di risposta con precisione sufficiente può ricostruire il token carattere per carattere. `hmac.compare_digest` itera sempre su tutti i caratteri indipendentemente da dove si trova la differenza — tempo costante garantito. E se il token non è configurato, `require_internal_token` fa fail-closed: lancia un'eccezione 401, non lascia passare silenziosamente."*
+
+> *"**Validazione dei file**. Il serializer Django controlla estensione e dimensione — massimo dieci megabyte. Ma questo non basta: l'estensione la dichiara l'utente."*
+
+🔬 > *"**Magic bytes**. I formati file hanno firme binarie nelle prime posizioni: PNG inizia con `\\x89PNG`, JPEG con `\\xff\\xd8\\xff`, PDF con `%PDF-`, ZIP con `PK\\x03\\x04`. Questi byte non possono essere fatti coincidere senza corrompere il file — un file con header PNG ma contenuto JavaScript è un file PNG corrotto, non uno script eseguibile. Il router OCR di FastAPI legge i magic bytes prima di passare il file a GPT Vision. Un file `.png` con header ZIP viene rifiutato con 422."*
 
 > *"**Prompt injection guard**. Tutti e tre i router AI hanno un blocco esplicito nel prompt che dice a GPT di ignorare istruzioni embedded nel contenuto del documento. GPT risponde con un campo `injection_detected`. Se è true: log server-side, HTTP 422 al client con messaggio generico. Il contenuto malevolo non passa mai."*
 
-> *"**Errori generici verso il client**. Il client non vede mai stack trace, path di file, nomi di variabili. Riceve sempre un messaggio generico. Il dettaglio tecnico va solo nei log del server, accessibili solo agli amministratori."*
+> *"**Errori generici verso il client**. Il client non vede mai stack trace, path di file, nomi di variabili. Riceve sempre un messaggio generico. Il dettaglio tecnico va solo nei log del server."*
 
 > *"**Deduplicazione SHA-256**. Ho già menzionato che uso l'hash del contenuto del file per rilevare duplicati. Questo ha anche un'implicazione di sicurezza: previene che qualcuno carichi lo stesso file mille volte cambiandogli solo il nome per esaurire la quota GPT."*
-
-> *"**Password policy**. Il sistema applica i validator Django standard: lunghezza minima, nessuna password troppo comune, nessuna password identica all'username. Il cambio password richiede la password corrente — un access token rubato non basta per cambiare le credenziali dell'account."*
 
 ---
 
@@ -308,25 +355,25 @@ if "qty" in header.lower() or "quantità" in header.lower() or "menge" in header
 
 ❓ **"GPT non è deterministico — come gestisci le variazioni tra un parsing e l'altro?"**
 
-> *"Tre livelli di difesa. Primo: `temperature=0` nelle chiamate di parsing — questo maximizza il determinismo dell'output GPT. Secondo: la cache column mapping salva il mapping già validato per ogni fornitore — il secondo upload dello stesso fornitore non chiama GPT per la struttura, usa la cache. Terzo, e questo è il più importante: anche se GPT sbaglia il mapping tra un run e l'altro, il `raw_data` JSONB salva sempre tutti i valori originali con i nomi reali delle colonne CSV. Il livello 2 della riconciliazione usa `raw_data` per il confronto effettivo, quindi è immune alle variazioni di mapping."*
+> *"Tre livelli di difesa. Primo: `temperature=0` nelle chiamate di parsing — GPT usa la distribuzione softmax sul vocabolario dei token, e temperature zero sceglie sempre il token con probabilità più alta, il cosiddetto argmax. Non è matematicamente garantito al cento percento ma è il comportamento più stabile possibile. Secondo: la cache column mapping salva il mapping già validato per ogni fornitore — il secondo upload dello stesso fornitore non chiama GPT per la struttura, usa la cache con TTL trenta giorni. Terzo: anche se GPT sbagliasse il mapping tra un run e l'altro, il `raw_data` JSONB salva sempre tutti i valori originali con i nomi reali delle colonne CSV. Il livello 2 della riconciliazione usa `raw_data` per il confronto effettivo, quindi è immune alle variazioni di mapping."*
 
 ---
 
 ❓ **"Come scala il sistema se arrivano mille file al giorno?"**
 
-> *"Il bottleneck principale è il Celery worker. Per parallelizzare basta aggiungere istanze di `celery_worker` nel Docker Compose — ognuna prende job indipendenti dalla coda Redis. FastAPI è stateless, si scala allo stesso modo. PostgreSQL con gli indici che ho aggiunto — su `supplier_canonical`, `status`, `created_at` — regge facilmente migliaia di documenti al giorno. Redis con questo volume è abbondantemente sufficiente. Per scala enterprise: Kubernetes con autoscaling orizzontale dei worker, PostgreSQL read replicas, Redis Cluster. L'architettura a microservizi nasce proprio per questo."*
+> *"Il bottleneck principale è il Celery worker. Per parallelizzare basta aggiungere istanze di `celery_worker` nel Docker Compose — ognuna prende job indipendenti dalla coda Redis. FastAPI è stateless, si scala allo stesso modo. PostgreSQL con gli indici che ho aggiunto — su `supplier_canonical`, `status`, `created_at` — regge facilmente migliaia di documenti al giorno. Redis DB 1 è condiviso tra tutti i worker: la cache embedding è calda per l'intera flotta subito, senza che ogni worker debba ricostruirla da zero. Per scala enterprise: Kubernetes con autoscaling orizzontale dei worker, PostgreSQL read replicas, Redis Cluster. L'architettura a microservizi nasce proprio per questo."*
 
 ---
 
 ❓ **"Perché hai usato Django E FastAPI invece di scegliere uno solo?"**
 
-> *"Django è il migliore per gestire stato, autenticazione, ORM, relazioni tra modelli. Ha un ecosistema maturo per tutto quello. FastAPI è il migliore per I/O asincrono e integrazione LLM — la sua gestione nativa async/await è fondamentale perché le chiamate a GPT-4o possono durare secondi e non devo bloccare il thread. Se usassi solo Django, le chiamate OpenAI bloccherebbero il worker WSGI per tutta la durata. Se usassi solo FastAPI, dovrei reimplementare da zero autenticazione, ORM, admin, serialization. Usarli insieme in microservizi è la scelta che massimizza i punti di forza di entrambi."*
+> *"Django è il migliore per gestire stato, autenticazione, ORM, relazioni tra modelli. Ha un ecosistema maturo per tutto quello. FastAPI è il migliore per I/O asincrono e integrazione LLM — la sua gestione nativa async/await con AsyncOpenAI è fondamentale perché le chiamate a GPT-4o possono durare secondi e non devo bloccare il thread. Se usassi solo Django, le chiamate OpenAI bloccherebbero il worker WSGI per tutta la durata della risposta. Se usassi solo FastAPI, dovrei reimplementare da zero autenticazione, ORM, admin, serialization. Usarli insieme in microservizi è la scelta che massimizza i punti di forza di entrambi."*
 
 ---
 
 ❓ **"Come funziona la deduplicazione se qualcuno carica lo stesso file due volte?"**
 
-> *"Due livelli. Il primo è l'hash SHA-256 del contenuto del file, calcolato subito al momento dell'upload. Se due documenti hanno lo stesso hash, sono identici a livello di byte — anche se li hai caricati con nomi diversi — e non vengono mai riconciliati tra loro. Il secondo livello è il fingerprint della coppia già riconciliata: se esiste già una riconciliazione con gli stessi tipo-fornitore-numero per entrambi i documenti, quella coppia viene saltata. Questo gestisce il caso in cui qualcuno carichi lo stesso documento con un piccolo cambiamento — hash diverso, ma stessa coppia logica."*
+> *"Due livelli. Il primo è l'hash SHA-256 del contenuto del file, calcolato subito al momento dell'upload nel task Celery — prima ancora di chiamare FastAPI. SHA-256 è una funzione crittografica: due file con contenuto identico danno sempre lo stesso hash, due file con anche un solo byte diverso danno hash completamente diversi. Se due documenti nel DB hanno lo stesso hash, sono identici a livello di byte e non vengono mai riconciliati tra loro — anche se li hai caricati con nomi diversi. Il secondo livello è il fingerprint della coppia già riconciliata: se esiste già una Reconciliation con gli stessi tipo-fornitore-numero per entrambi i documenti, quella coppia viene saltata. Questo gestisce il caso in cui qualcuno carichi lo stesso documento con un piccolo cambiamento — hash diverso, ma stessa coppia logica."*
 
 ---
 
@@ -338,19 +385,31 @@ if "qty" in header.lower() or "quantità" in header.lower() or "menge" in header
 
 ❓ **"Il sistema funziona senza OpenAI?"**
 
-> *"No, GPT-4o è centrale sia per il parsing che per l'OCR e la valutazione semantica. Senza API key, i documenti rimangono in stato 'pending' e poi passano a 'error' con un messaggio generico — nessun dettaglio tecnico viene esposto al client. Detto questo, i test unitari — ne ho 116 — girano completamente senza OpenAI perché tutte le chiamate API sono mockate con monkeypatch. I test E2E invece richiedono l'API key reale."*
+> *"No, GPT-4o è centrale sia per il parsing che per l'OCR e la valutazione semantica. Senza API key, i documenti rimangono in stato 'pending' e poi passano a 'error' con un messaggio generico — nessun dettaglio tecnico viene esposto al client. Detto questo, i test unitari girano completamente senza OpenAI perché tutte le chiamate API sono mockate con monkeypatch. I test E2E invece richiedono l'API key reale."*
 
 ---
 
 ❓ **"La cache dei column mapping è davvero efficace?"**
 
-> *"La risposta onesta è: l'infrastruttura è completa e funzionante — Redis DB 2 riceve il mapping dopo ogni parsing, con TTL di trenta giorni. Il punto su cui sono ancora a lavoro è il pre-lookup: per leggere la cache prima di chiamare GPT, devo sapere il nome del fornitore in anticipo. Ora lo estraggo dal file grezzo, ma non tutti i file hanno una riga esplicita 'Fornitore: X'. Il miglioramento ovvio — e quello che farei dopo questa challenge — è usare il `supplier_canonical` già salvato nel database dal parsing precedente per costruire la chiave cache, invece di cercarlo nel file. Questo renderebbe la cache efficace per tutti i fornitori già visti, non solo quelli che usano un formato specifico."*
+> *"La risposta onesta è: l'infrastruttura è completa e funzionante — Redis DB 2 riceve il mapping dopo ogni parsing, con TTL di trenta giorni. Il punto su cui sono ancora a lavoro è il pre-lookup: per leggere la cache prima di chiamare GPT, devo sapere il nome del fornitore in anticipo. Ora lo estraggo dal file grezzo scansionando le prime dieci righe alla ricerca di keyword come 'Fornitore:' o 'Supplier:'. Non tutti i file hanno una riga del genere. Il miglioramento ovvio è usare il `supplier_canonical` già salvato nel database dal parsing precedente per costruire la chiave cache, invece di cercarlo nel file. Questo renderebbe la cache efficace per tutti i fornitori già visti, non solo quelli che usano un formato specifico."*
+
+---
+
+❓ **"Perché usare embedding semantico e non solo fuzzy string matching per confrontare i fornitori?"**
+
+> *"Il fuzzy matching con SequenceMatcher misura distanza di edit — quante operazioni per trasformare una stringa nell'altra. Funziona benissimo per varianti minime dello stesso nome dopo normalizzazione: 'ALFA SRL' e 'Alfa S.r.l.' dopo stripping dei suffissi societari diventano entrambe 'ALFA', similarità 100%. Ma non funziona per nomi semanticamente equivalenti ma strutturalmente diversi: 'Nordic Design' e 'Nordisches Design GmbH' hanno bassa similarità di edit ma sono lo stesso fornitore scritto in lingue diverse. L'embedding trasforma il testo in un vettore di millequinquecentotrentasei numeri float che cattura il significato semantico — parole correlate in lingue diverse hanno vettori vicini nello spazio perché il modello è addestrato su testo multilingua. Il cosine tra i loro vettori misura l'angolo: zero significa non correlati, uno identici. Sopra 0.88 è stesso fornitore, sopra 0.72 è probabilmente lo stesso. L'approccio combinato — rapidfuzz per il canonical name e embedding per il match score — gestisce sia le varianti ortografiche che le traduzioni."*
+
+---
+
+❓ **"Cosa succede se Redis crasha durante una riconciliazione?"**
+
+> *"Il sistema è progettato fail-soft su tutta la cache. `_get_redis()` ritorna None se la connessione fallisce — mai un'eccezione che propaga. Ogni punto del codice che usa Redis per gli embedding è wrappato in try-except con fallback: se la cache non risponde, si chiama direttamente OpenAI. Se anche OpenAI è irraggiungibile, la componente fornitore del match score vale zero e la riconciliazione degrada gracefully senza crashare. I dati critici — documenti, riconciliazioni, discrepanze — sono tutti in PostgreSQL, non in Redis. Redis è solo accelerazione. Se crasha e riparte, la cache si ripopola organicamente con i prossimi upload. L'unica perdita reale è la coda Celery se Redis crasha senza persistence — i job in coda vengono persi e i documenti restano in stato 'pending'. Il fix è abilitare Redis AOF persistence o usare RabbitMQ come broker. Per lo scope della challenge è un tradeoff accettabile."*
 
 ---
 
 ❓ **"Hai fatto test automatici?"**
 
-> *"Sì. Centodieci test unitari con pytest sul backend Django, scritti con fixtures e monkeypatching — nessuna chiamata reale a GPT o al database esterno. Coprono l'engine di riconciliazione a tutti i livelli — fuzzy matching, embedding fallback, multi-sezione, riconciliazione cascata, deduplicazione. E una suite di test di integrazione che carica i file challenge reali, aspetta l'elaborazione Celery, e verifica che i risultati corrispondano alle aspettative. I test girano in isolamento: conftest pulisce la cache Redis prima di ogni test e imposta rate limit altissimi per non essere bloccati dal throttling."*
+> *"Sì. Test unitari con pytest sul backend Django, con fixtures e monkeypatching — nessuna chiamata reale a GPT o al database esterno. Coprono l'engine di riconciliazione a tutti i livelli — fuzzy matching, embedding fallback, multi-sezione, riconciliazione cascata, deduplicazione SHA-256. I test girano in isolamento: `conftest.py` pulisce la cache Redis prima di ogni test e imposta rate limit altissimi nei settings di test per non essere bloccati dal throttling durante le suite."*
 
 ---
 
