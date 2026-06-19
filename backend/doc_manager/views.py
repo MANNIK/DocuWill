@@ -400,7 +400,7 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        today = timezone.now().date()
+        today = timezone.localdate()  # data nel fuso configurato (Europe/Rome), non UTC
         seven_days_ago = today - timedelta(days=6)
         user = request.user
 
@@ -413,7 +413,7 @@ class DashboardStatsView(APIView):
             )
         )
 
-        pending = doc_qs.filter(status=Document.StatusChoices.PENDING).count()
+        pending = recon_qs.filter(status=Reconciliation.StatusChoices.PENDING).count()
         processed_today = doc_qs.filter(
             status=Document.StatusChoices.PROCESSED,
             updated_at__date=today,
