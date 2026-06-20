@@ -12,7 +12,7 @@ Package di settings Django in tre livelli: `base` (shared production-safe), `loc
 - **Ordine critico in `test.py`**: `os.environ.setdefault(...)` deve precedere `from .base import *` perché `base.py` legge `os.environ` all'importazione
 - Non aggiungere secret hardcoded in nessun file di settings — usare `env("KEY")` da `django-environ`
 - `AI_SERVICE_URL` default è `http://ai_service:8001` (hostname Docker compose)
-- Redis DB allocation: DB 0 = Celery broker, DB 1 = embedding cache, DB 2 = CSV column-mapping cache
+- Redis DB allocation: DB 0 = Celery broker, DB 1 = embedding cache, DB 2 = CSV column-mapping cache, DB 3 = Django `CACHES` (contatori throttle)
 
 ## Comandi
 ```bash

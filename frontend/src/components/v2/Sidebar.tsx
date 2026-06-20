@@ -47,6 +47,8 @@ export default function Sidebar() {
       } catch { /* silenzioso */ }
     }
     loadCounts()
+    const interval = setInterval(loadCounts, 1500)
+    return () => clearInterval(interval)
   }, [])
 
   function isActive(href: string) {

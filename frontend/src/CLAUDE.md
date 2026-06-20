@@ -8,20 +8,20 @@ Root del codice sorgente Next.js. Contiene `app/` (route segments App Router), `
 src/
 ├── app/
 │   ├── layout.tsx          ← root HTML shell
-│   ├── (main)/             ← route group legacy (documents/[id], login, register, ecc.)
+│   ├── page.tsx            ← landing/redirect
+│   ├── login/ · register/  ← auth (fuori da v2)
 │   └── v2/                 ← UI attiva "Quoro" — tutto il nuovo lavoro va qui
 ├── components/
-│   ├── v2/                 ← componenti v2 (attivi)
-│   └── *.tsx               ← componenti legacy (solo per (main)/*)
+│   └── v2/                 ← tutti i componenti UI (attivi)
 └── lib/
-    └── api.ts              ← client HTTP con JWT auto-refresh
+    ├── api.ts              ← client HTTP con JWT auto-refresh
+    └── upload-context.tsx  ← Context per persistere gli upload job tra navigazioni
 ```
 
 ## Convenzioni critiche
 - ⚠ `frontend/AGENTS.md` avverte: "This is NOT the Next.js you know" — APIs e convenzioni differiscono dal training data. Leggere `node_modules/next/dist/docs/` prima di scrivere codice
-- Tutto il nuovo lavoro va in `app/v2/` e `components/v2/`
-- Non estendere i componenti `components/*.tsx` (legacy)
-- Le route dinamiche usano `[id]` come segmento cartella con `page.tsx` dentro
+- Tutto il lavoro UI va in `app/v2/` e `components/v2/` (non esistono più componenti legacy fuori da `v2/`)
+- Le route dinamiche usano `[id]` come segmento cartella con `page.tsx` dentro (es. `v2/documents/[id]`, `v2/reconciliations/[id]`)
 - I `page.tsx` che usano hooks React o localStorage sono `'use client'`
 
 ## Dipendenze cross-folder

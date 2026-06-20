@@ -14,6 +14,8 @@ v2/
 ├── reconciliations/
 │   ├── page.tsx        ← lista riconciliazioni
 │   └── [id]/page.tsx   ← dettaglio: DocCard pair + DiscrepancyRail
+├── documents/
+│   └── [id]/page.tsx   ← dettaglio documento: metadati + righe estratte + ImagePreview
 ├── suppliers/page.tsx  ← lista fornitori con canonical grouping
 ├── settings/page.tsx   ← AppSettings
 └── profile/page.tsx    ← profilo utente con JWT decode

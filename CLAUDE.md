@@ -17,7 +17,7 @@ Contesto business: challenge tecnica per entrare in WeWill (startup italiana). V
 
 | Layer | Tecnologia |
 |-------|-----------|
-| Frontend | Next.js + React + TypeScript + Tailwind |
+| Frontend | Next.js (App Router) + React + TypeScript + design system custom "Quoro" (classi `q-*`) |
 | Backend principale | Django 5.0 + DRF + django-environ |
 | Database | PostgreSQL 16 |
 | Microservizio AI | FastAPI + uvicorn |
@@ -42,7 +42,7 @@ wewill-challenge/
 ├── .env.frontend         ← variabili Next.js
 ├── .gitignore
 ├── CLAUDE.md
-├── SECURITY_CHANGES.md   ← changelog dettagliato di tutte le modifiche di sicurezza
+├── README.md
 │
 ├── backend/              ← Django
 │   ├── Dockerfile
@@ -55,14 +55,19 @@ wewill-challenge/
 │   │   ├── celery.py
 │   │   ├── urls.py
 │   │   └── wsgi.py
+│   ├── config/settings/  ← base.py + local.py + test.py (pytest, SQLite in-memory)
+│   ├── tests/            ← pytest Django/DRF + riconciliazione (conftest, 5 file test)
 │   └── doc_manager/      ← app principale
-│       ├── models.py     ← Document, DocumentRow, Reconciliation, Discrepancy
-│       ├── views.py      ← API endpoints
+│       ├── models.py     ← AppSettings, Document, DocumentRow, Reconciliation, Discrepancy
+│       ├── views.py      ← API endpoints (IsAuthenticated)
 │       ├── serializers.py
-│       ├── tasks.py      ← Celery task principale
-│       ├── reconciliation.py ← logica riconciliazione a cascata
-│       ├── throttling.py ← classi throttle scoped (UploadBurst, Register, Webhook)
-│       ├── utils.py      ← is_safe_external_url() (anti-SSRF)
+│       ├── tasks.py      ← Celery task principale (process_document_task)
+│       ├── reconciliation.py ← logica riconciliazione a cascata (L1→L2→L3) + embedding cache
+│       ├── tariff_reconciliation.py ← confronto deterministico per tariffari/doc non-standard
+│       ├── throttling.py ← classi throttle scoped (UploadBurst, Register, Webhook, LoginBurst)
+│       ├── utils.py      ← is_safe_external_url() (anti-SSRF), normalize_supplier, canonical
+│       ├── management/commands/ ← normalize_existing_suppliers (backfill supplier_canonical)
+│       ├── migrations/   ← 0001→0007
 │       ├── urls.py
 │       └── admin.py
 │
@@ -71,20 +76,28 @@ wewill-challenge/
 │   ├── requirements.txt
 │   ├── main.py
 │   ├── deps.py           ← dependency require_internal_token (header X-Internal-Token)
+│   ├── tests/            ← pytest (csv_parser, supplier_normalize) — tutto mocked
+│   ├── utils/            ← supplier.py (normalize_for_cache, KEEP IN SYNC con backend)
 │   └── routers/
 │       ├── __init__.py
 │       ├── csv_parser.py ← parsing CSV/Excel con GPT-4o
-│       ├── ocr.py        ← OCR immagini con GPT-4o Vision
+│       ├── table_segmentation.py ← rilevamento multi-tabella deterministico (zero GPT)
+│       ├── ocr.py        ← OCR immagini con GPT-4o Vision (/ocr/image + /ocr/upload)
 │       └── classifier.py ← classificazione tipo documento
 │
-├── frontend/             ← Next.js
+├── frontend/             ← Next.js (design system "Quoro")
 │   ├── Dockerfile
 │   └── src/
-│       └── app/          ← App Router (ancora pagina default)
+│       ├── app/v2/       ← UI attiva: dashboard, upload, inbox, reconciliations,
+│       │                   documents/[id], suppliers, settings, profile
+│       ├── components/v2/ ← primitivi + widget (Card, Pill, DocCard, DiscrepancyRail, …)
+│       └── lib/api.ts    ← client HTTP tipizzato con JWT auto-refresh
 │
 └── scripts/
     ├── start-worker.sh
-    └── start-beat.sh
+    ├── start-beat.sh
+    ├── test_agent.py     ← runner E2E black-box
+    └── generate_ocr_docs.py ← genera HTML→PDF per test OCR
 ```
 
 ---
@@ -99,20 +112,20 @@ CSV upload → Django (crea Document pending) → Celery task
   → find_and_reconcile() cerca candidato
   → Riconciliazione a cascata (L1 math → L2 GPT-4o semantico → L3 decisione)
   → Reconciliation + Discrepancy salvati
-  → Operatore vede tutto in UI (da fare)
+  → Operatore vede tutto nella UI v2 (dashboard, coda, dettaglio riconciliazione)
 
-Foto WhatsApp → webhook Django → Celery task
-  → FastAPI /ocr/image → GPT-4o Vision estrae dati
+Foto WhatsApp / upload immagine → webhook/endpoint Django → Celery task
+  → FastAPI /ocr/upload (bytes) o /ocr/image (URL) → GPT-4o Vision estrae dati
   → stesso flusso di riconciliazione
 ```
 
 ### Decisioni architetturali chiave
 
 **Parser CSV — GPT-4o invece di keyword matching**
-Scartato approccio con liste di keyword per trovare header e mappare colonne. Usato GPT-4o: legge le prime 50 righe grezze, restituisce JSON con `header_row_index`, `data_row_indices`, `column_mapping`, `metadata`, `doc_type`. Poi Python usa quella struttura per estrarre tutte le righe del file (anche 564+).
+Scartato approccio con liste di keyword per trovare header e mappare colonne. Usato GPT-4o: riceve un preview compatto (testa + coda di ogni tabella + tutte le righe header-like), restituisce JSON con `header_row_index`, `data_row_indices`, `column_mapping`, `metadata`, `doc_type` per ogni sezione. Poi Python usa quella struttura per estrarre tutte le righe del file (anche 564+).
 
-**Multi-sezione: un file può contenere più documenti**
-File 04-multi-table.csv aveva ordini di 2 fornitori diversi nello stesso file. GPT-4o restituisce una lista di `sections`, ognuna diventa un `Document` separato nel DB. Il Celery task aggiorna il primo Document e crea nuovi Document per le sezioni aggiuntive.
+**Multi-sezione: rilevamento deterministico dei confini (zero GPT)**
+File 04-multi-table.csv aveva ordini di 2 fornitori diversi nello stesso file. Prima di chiamare GPT, `table_segmentation.detect_table_segments()` scorre TUTTE le righe in puro Python e trova i confini fisici delle tabelle con segnali strutturali: confine di sheet Excel, N righe vuote consecutive, header ripetuto, cambio brusco del n° colonne piene, shift della "firma" di riga (da righe-dati numeriche a riga-header testuale). I confini ambigui (`confidence=low`) sono confermati da una sola chiamata GPT batch (`confirm_ambiguous_boundaries`). `build_segmented_preview()` manda a GPT testa (15) + coda (5) di ogni segmento PIÙ tutte le righe che "sembrano header" — così GPT vede l'inizio di ogni tabella anche oltre la riga 50. GPT restituisce una lista di sezioni, ognuna diventa un `Document` separato nel DB (cap `MAX_SECTIONS=20`).
 
 **Riconciliazione a cascata (3 livelli)**
 - L1: confronto matematico esatto (gratuito, millisecondi) — se tutto quadra, stop
@@ -123,7 +136,10 @@ File 04-multi-table.csv aveva ordini di 2 fornitori diversi nello stesso file. G
 `compute_match_score()` calcola score 0-100 su: numero documento identico (+50), stesso fornitore (+30), stessa data (+10), totali simili (+5-10), overlap codici articolo Jaccard (+10-40). Soglia minima: 30. `are_documents_complementary()` chiede a GPT se la coppia ha senso prima di tentare il match (evita di riconciliare due ordini identici).
 
 **Estrazione righe da file grandi**
-GPT vede solo le prime 50 righe per capire la struttura. Il `data_row_indices` restituito da GPT copre solo il campione. La funzione `parse_csv_excel` estende automaticamente `data_row_indices` dalla prima riga dati fino alla fine del file, senza ulteriori chiamate API.
+GPT vede solo un campione (testa + coda di ogni segmento) per capire la struttura. Il `data_row_indices` restituito copre solo il campione: per i file a sezione singola, l'estrazione estende automaticamente `data_row_indices` dalla prima riga dati fino alla fine del file, senza ulteriori chiamate API.
+
+**Tariffari e documenti non-standard — confronto deterministico (`tariff_reconciliation.py`)**
+Per i tariffari (price_list) il confronto numerico non passa più da GPT (costoso, non deterministico, non scala). `reconcile_nonstandard()` normalizza i due `raw_data` — gestendo sia il formato CSV (nomi colonna originali) sia quello OCR (item_code "esploso" con dimensioni nel codice) — classifica le colonne (chiave vs valore numerico vs valuta), allinea le righe per chiave e confronta i numeri con tolleranza. Tutto in Python.
 
 ---
 
@@ -137,8 +153,9 @@ GPT vede solo le prime 50 righe per capire la struttura. Il `data_row_indices` r
 - Celery connesso a Redis, task `process_document_task` registrato e funzionante
 
 **Backend Django**
-- Modelli: `Document`, `DocumentRow`, `Reconciliation`, `Discrepancy` con tutte le relazioni
-- API endpoints: `GET /api/documents/`, `POST /api/documents/upload/`, `GET /api/documents/<id>/`, `POST /api/webhook/whatsapp/`, `GET /api/reconciliations/`, `GET /api/reconciliations/<id>/`, `PATCH /api/reconciliations/<id>/review/`
+- Modelli: `AppSettings`, `Document`, `DocumentRow`, `Reconciliation`, `Discrepancy` con tutte le relazioni
+- API endpoints completi (vedi sezione "Endpoint API principali"): documents (+upload, +upload-image), reconciliations (+review), discrepancies, suppliers, settings (+cache), dashboard/stats, whatsapp inbox+webhook, notifications, search, auth (register/logout/me/token), dev/reset
+- Tutti gli endpoint protetti da JWT (`IsAuthenticated`); object-level authz su `created_by` (404, non 403)
 - Admin Django registrato per tutti i modelli
 - Celery task che chiama FastAPI, persiste dati, lancia riconciliazione
 
@@ -158,6 +175,9 @@ GPT vede solo le prime 50 righe per capire la struttura. Il `data_row_indices` r
 - `level1_exact_match()` — confronto matematico
 - `level2_semantic_check()` — GPT valuta discrepanze (solo righe coinvolte)
 - `level3_decide()` — auto-approva se nessun errore reale
+- `reconcile_nonstandard()` (`tariff_reconciliation.py`) — confronto deterministico per tariffari/doc non-standard
+- Embedding cache su Redis DB 1 (`_embed()`: dict in-process → Redis TTL 24h → OpenAI text-embedding-3-small), cosine similarity in puro Python, fail-soft
+- Prefiltro candidati per `supplier_canonical` + cap `MAX_RECON_CANDIDATES=25`
 
 **Testato con file reali:**
 - 01-simple-order.csv ✅
@@ -177,7 +197,7 @@ Riconciliazione testata con 04+07: trovata discrepanza quantità su ALP-843 (ord
 - Quota giornaliera per utente (default 200 documenti/giorno) via `AppSettings.daily_document_quota`
 - Anti-SSRF: `is_safe_external_url()` in `utils.py` risolve il DNS e rifiuta tutti gli IP privati/loopback/link-local incluso `169.254.169.254`; `follow_redirects=False` nel fetch Twilio
 - Autenticazione interna backend↔ai_service via header `X-Internal-Token` (dep `require_internal_token` in `deps.py`); porta 8001 rimossa dall'host Docker
-- JWT hardening: `ACCESS_TOKEN_LIFETIME=15min`, `ROTATE_REFRESH_TOKENS=True`, blacklist al logout; endpoint `POST /api/auth/logout/`
+- JWT hardening: `ACCESS_TOKEN_LIFETIME=60min` (override via `JWT_ACCESS_MINUTES`), `ROTATE_REFRESH_TOKENS=True`, blacklist al logout; endpoint `POST /api/auth/logout/`; throttle dedicato sul login (`LoginBurstThrottle`)
 - Validazione upload: estensione + dimensione (max 10 MB) nel serializer; magic bytes MIME per le immagini nel router OCR
 - Cap `MAX_SECTIONS=20` in csv_parser (evita amplificazione LLM con file ostili)
 - Cap `MAX_RECON_CANDIDATES=25` in reconciliation + prefiltro per `supplier_canonical` (O(N) LLM → O(1) ammortizzato)
@@ -189,80 +209,57 @@ Riconciliazione testata con 04+07: trovata discrepanza quantità su ALP-843 (ord
 - `.env.ai` minimale per ai_service (non vede `DJANGO_SECRET_KEY`, `DATABASE_URL`, `TWILIO_*`)
 - `conftest.py` nei test: `cache.clear()` prima di ogni test, throttle rates altissimi per i test
 
-### 🔴 Non ancora iniziato
+**Frontend Next.js (design system "Quoro" — `app/v2/`)**
+- Dashboard con KPI, coda riconciliazione, grafici ingestion/discrepanze, documenti recenti
+- Upload multiplo (un `UploadJob` per file, progress async), inbox WhatsApp/immagini
+- Lista + dettaglio riconciliazione (DocCard pair + DiscrepancyRail), dettaglio documento (`documents/[id]`), suppliers, settings, profilo
+- Client `lib/api.ts` tipizzato con JWT auto-refresh su 401
 
-- **Frontend Next.js** — pagina ancora quella di default, zero UI implementata
-- **Autenticazione JWT obbligatoria** — `AllowAny` su tutti gli endpoint, JWT configurato ma non enforced
-- **WhatsApp integration** — solo mock endpoint, nessuna integrazione reale (Twilio o Meta API)
-- **WebSocket/notifiche** — L3 segna pending ma non notifica l'operatore
-- **Test automatici** — zero test scritti
+**Autenticazione JWT** — enforced su tutti gli endpoint (`IsAuthenticated`); login/register/logout/me funzionanti
 
-### ⚠️ Parzialmente implementato
+**Test automatici** — pytest backend (`backend/tests/`, 5 file) e ai_service (`ai_service/tests/`, 3 file), tutto mockato (zero OpenAI/Redis reali)
 
-- **Confidence check** — `doc_type_confidence` estratto ma non usato per retry con più contesto
-- **Cache per-fornitore** — non implementata (bonus della challenge)
+**Cache per-fornitore** — implementata: column-mapping cache su Redis DB 2 (key `col_map:<supplier_hash>:<headers_hash>`, TTL 30gg)
+
+### 🔴 Non ancora iniziato / parziale
+
+- **WhatsApp integration reale** — webhook funziona; integrazione Twilio/Meta API end-to-end non completata
+- **WebSocket/notifiche push** — endpoint notifications via polling; nessun push real-time
+- **Confidence check con retry** — `doc_type_confidence` estratto ma non usato per retry con più contesto
 
 ---
 
 ## Problemi noti e workaround
 
-### Bug noti da fixare prima della consegna
+### Bug storici (risolti — tenuti come memoria)
 
-1. **Riepilogo finale incluso nelle righe (file 08)**
-   File 08 ha righe di riepilogo alla fine (`RIEPILOGO PERIODO`, `Totale Spedizioni`, ecc.) che vengono incluse nei dati. Il fix è filtrare righe senza `item_code` E senza valore numerico significativo quando la `description` contiene parole come "totale", "riepilogo", "peso totale".
-
-2. **Colonna sbagliata per `quantity` in packing list (file 07)**
-   GPT mappa `quantity` su "Qty per Box" invece di "Total Qty". Fix: aggiunta regola nel prompt di `ask_claude_to_understand_structure`:
-   > "Per documenti con colonne 'Qty per Box' E 'Total Qty', mappa SEMPRE quantity sulla colonna del totale"
-
-3. **`discount` invece di `total_price` per prezzi scontati (file 06)**
-   "Prezzo Scontato"/"Importo Netto" viene mappato su `discount` invece di `total_price`. Fix: aggiunta regola nel prompt:
-   > "'Prezzo Scontato', 'Importo Netto', 'Prezzo Finale' → total_price. 'Sconto %' → discount"
-
-4. **`doc_type: "summary"` non in TypeChoices**
-   File 05 genera una sezione con `doc_type: "summary"` che non esiste nei choices Django. Fix: aggiungere `SUMMARY = "summary", "Riepilogo"` a `Document.TypeChoices` oppure mappare su `unknown` nel task.
-
-5. **Floating point imprecision nei totali**
-   `8155.650000000001` invece di `8155.65`. Fix: `round(total, 2)` prima di assegnare `total_amount`.
+1. **Riepilogo finale incluso nelle righe (file 08)** — risolto: la coda di ogni segmento è mostrata a GPT (`build_segmented_preview`) così le righe `RIEPILOGO`/`Totale` vengono escluse dai `data_row_indices`.
+2. **`quantity` su "Qty per Box" invece di "Total Qty" (file 07)** — risolto con regola dedicata nel prompt di struttura.
+3. **`discount` invece di `total_price` per prezzi scontati (file 06)** — risolto: "Prezzo Scontato/Importo Netto/Prezzo Finale" → `total_price`, "Sconto %" → `discount` nel prompt.
+4. **`doc_type: "summary"` non in TypeChoices** — risolto: aggiunti `SUMMARY` e `INVENTORY` a `Document.TypeChoices`.
+5. **Floating point nei totali** (`8155.650000000001`) — risolto con `round(total, 2)`.
 
 ### Limitazioni note
 
-- GPT vede solo 50 righe di preview per capire la struttura. Per file con struttura che cambia dopo la riga 50 potrebbe sbagliare il mapping. Attualmente non gestito.
-- `are_documents_complementary()` chiama GPT per ogni coppia candidata — se ci sono molti documenti nel DB questo diventa lento. Va ottimizzato con il cache fornitore.
+- Il preview mandato a GPT è un campione (testa+coda di ogni segmento + righe header-like): per file con struttura che cambia in mezzo a un segmento il mapping può sbagliare in casi estremi.
+- `are_documents_complementary()` chiama GPT per ogni coppia candidata; mitigato dal prefiltro `supplier_canonical` + cap `MAX_RECON_CANDIDATES=25`.
 - File con encoding non standard (es. windows-1252 con caratteri speciali) può fallire silenziosamente.
 
 ---
 
-## Prossimi passi (in ordine di priorità)
+## Prossimi passi (residui)
 
-### 1. Fix bug noti (prima di tutto)
-- [ ] Fix riepilogo finale incluso nelle righe (file 08)
-- [ ] Fix `quantity` → Total Qty invece di Qty per Box (file 07)
-- [ ] Fix `discount` vs `total_price` per prezzi scontati (file 06)
-- [ ] Fix `doc_type: "summary"` non in TypeChoices
-- [ ] Fix floating point `round(total, 2)`
+### 1. WhatsApp integration reale
+Il webhook esiste; manca l'integrazione end-to-end con Twilio sandbox o Meta API per il flusso completo foto→OCR→riconciliazione in produzione.
 
-### 2. Frontend Next.js
-Pagine da costruire:
-- **Dashboard** — lista documenti con status (pending/processed/error), pulsante upload
-- **Upload** — form drag&drop CSV/Excel, feedback asincrono mentre Celery processa
-- **Riconciliazioni** — lista con badge status (pending/approved/rejected)
-- **Dettaglio riconciliazione** — doc1 + doc2 affiancati, discrepanze evidenziate con colore per severità, bottoni Approva/Rifiuta/Correggi
+### 2. Notifiche push real-time
+Le notifiche sono via polling (`/api/notifications/`); valutare WebSocket/SSE per il push immediato all'operatore quando L3 lascia una riconciliazione `pending`.
 
-### 3. Generare documenti di test per OCR
-La challenge richiede di fotografare PDF "ricchi" (modulistica, non tabelle nude) per testare l'OCR. Generare HTML→PDF con dati dei CSV, introdurre discrepanze deliberate (quantità diverse, prezzi cambiati, righe mancanti) e fotografare.
-
-### 4. Test end-to-end WhatsApp
-Implementare mock webhook o Twilio sandbox e testare il flusso completo foto→OCR→riconciliazione.
-
-### 5. README
+### 3. README
 Scrivere README con: architettura, come eseguire (`docker compose up`), scelte tecniche, cosa è implementato/cosa no.
 
-### 6. (Bonus) Cache per-fornitore
-Salvare il `column_mapping` per fornitore. Se stesso fornitore manda file con header simili, verificare se il mapping cached è ancora valido (confronto intestazioni) prima di chiamare GPT.
-
-### 7. (Bonus) Confidence check con retry
-Se `doc_type_confidence < 50`, ritentare con più righe di preview (60 invece di 50).
+### 4. (Bonus) Confidence check con retry
+Se `doc_type_confidence < 50`, ritentare con più righe di preview.
 
 ---
 
@@ -274,9 +271,9 @@ Se `doc_type_confidence < 50`, ritentare con più righe di preview (60 invece di
 - File env: `.env.backend` per Django/Celery/DB, `.env.frontend` per Next.js, `.env.ai` per ai_service (minimale)
 
 ### Pattern Django
-- Tutte le view usano `permission_classes = [AllowAny]` temporaneamente — da sostituire con JWT prima della consegna
+- Tutte le view usano `permission_classes = [IsAuthenticated]`; l'authz object-level filtra per `created_by=request.user` e risponde 404 (non 403) sugli oggetti altrui
 - I task Celery importano i modelli dentro la funzione (non a livello modulo) per evitare problemi di circular import
-- `_update_document()` è una funzione helper in `tasks.py` per evitare duplicazione di codice tra primo documento e sezioni aggiuntive
+- `_update_document()` e `_save_ocr_result()` sono helper in `tasks.py` per evitare duplicazione tra primo documento e sezioni aggiuntive
 - Il throttle va applicato **view-per-view** con classi scoped, mai globalmente in `DEFAULT_THROTTLE_CLASSES` — gli endpoint di polling della UI (dashboard/stats, notifications, documents, reconciliations) generano ~1800 req/ora e verrebbero bloccati in meno di un minuto
 - Ogni chiamata `httpx` verso ai_service deve includere `headers=_ai_headers()` (token interno)
 - Validare `media_url` con `is_safe_external_url()` prima di qualsiasi fetch da URL esterno; usare `follow_redirects=False`
@@ -366,7 +363,7 @@ Rispondi SOLO con JSON valido:
       "data_row_indices": [<lista indici righe dati>],
       "column_mapping": {"<idx>": "item_code|description|quantity|unit|unit_price|total_price|discount|ignore"},
       "metadata": {"supplier_name": "", "document_number": "", "document_date": "", "total_amount": null},
-      "doc_type": "order|invoice|ddt|price_list|packing_list|shipment|confirmation|unknown",
+      "doc_type": "order|invoice|ddt|price_list|packing_list|shipment|confirmation|summary|inventory|unknown",
       "doc_type_confidence": <0-100>,
       "notes": ""
     }
@@ -417,29 +414,55 @@ print('DB pulito')
 "
 ```
 
-### Endpoint API principali
+### Endpoint API principali (tutti JWT, `IsAuthenticated`)
 ```
-GET  /api/documents/                    lista documenti
-POST /api/documents/upload/             upload CSV/Excel (multipart/form-data, field: file)
-GET  /api/documents/<id>/              dettaglio documento con righe
-POST /api/webhook/whatsapp/            mock webhook {from, media_url, caption}
-GET  /api/reconciliations/             lista riconciliazioni
-GET  /api/reconciliations/<id>/        dettaglio con discrepanze
-PATCH /api/reconciliations/<id>/review/ {status: approved|rejected|corrected, operator_notes: ""}
+# Auth
+POST /api/auth/token/                   login → access+refresh (throttled)
+POST /api/auth/token/refresh/           refresh access token
+POST /api/auth/register/                registrazione
+POST /api/auth/logout/                  blacklist refresh token
+GET  /api/auth/me/                      utente corrente
 
-# FastAPI (porta 8001)
+# Documenti
+GET  /api/documents/                    lista documenti
+POST /api/documents/upload/             upload CSV/Excel (multipart, field: file)
+POST /api/documents/upload-image/       upload immagine documento (OCR)
+GET  /api/documents/<id>/               dettaglio documento con righe
+
+# Riconciliazioni / discrepanze
+GET  /api/reconciliations/              lista
+GET  /api/reconciliations/<id>/         dettaglio con discrepanze
+PATCH /api/reconciliations/<id>/review/ {status, operator_notes}
+PATCH /api/discrepancies/<id>/          aggiorna singola discrepanza
+
+# Fornitori / settings / utility
+GET  /api/suppliers/  ·  GET /api/suppliers/<name>/
+GET/PATCH /api/settings/  ·  POST /api/settings/cache/   (clear cache)
+GET  /api/dashboard/stats/              KPI + coda + grafici + recent docs
+GET  /api/whatsapp/inbox/  ·  POST /api/webhook/whatsapp/
+GET  /api/notifications/  ·  GET /api/search/
+POST /api/dev/reset/                    pulisce il DB (solo dev)
+
+# FastAPI (porta 8001, interno — header X-Internal-Token)
 POST /parse/csv                        upload file CSV/Excel
 POST /ocr/image                        {image_url, caption}
+POST /ocr/upload                       upload immagine (bytes)
+POST /classify/document                classifica tipo documento
 GET  /docs                             Swagger UI
 ```
 
 ### Modelli Django — campi chiave
 ```python
+AppSettings (singleton):
+  daily_document_quota (default 200), altri parametri runtime
+
 Document:
-  source: upload | whatsapp
-  doc_type: unknown|order|invoice|ddt|price_list|packing_list|shipment|confirmation
+  source: upload | whatsapp | image
+  doc_type: unknown|order|invoice|ddt|price_list|packing_list|shipment|confirmation|summary|inventory
   status: pending | processed | error
-  supplier_name, document_number, document_date, total_amount
+  supplier_name, supplier_canonical (db_index), document_number, document_date, total_amount
+  created_by: FK(User)  ← authz object-level
+  file_hash: SHA-256 del contenuto  ← dedup upload
   extracted_data: JSONField (raw output FastAPI)
   error_message: TextField
 

@@ -1,10 +1,11 @@
 # CLAUDE.md — frontend/src/lib/
 
 ## Scopo
-Utility frontend condivise. Attualmente: solo `api.ts` — il client HTTP tipizzato per il backend Django.
+Utility frontend condivise: `api.ts` (client HTTP tipizzato) e `upload-context.tsx` (stato upload condiviso).
 
 ## File chiave
 - `api.ts` — fetch wrapper con JWT Bearer token; auto-refresh su 401 via `/api/auth/token/refresh/`; redirect a `/login` su fallimento hard; espone tipi TypeScript (`Document`, `DocumentRow`, `Reconciliation`, `Discrepancy`, `Notification`, `DashboardStats`, ecc.) e funzioni fetch tipizzate
+- `upload-context.tsx` — React Context che persiste gli `UploadJob[]` tra le navigazioni (un upload in corso non si perde cambiando pagina)
 
 ## Convenzioni
 - **Non chiamare `fetch` direttamente dai componenti** — usare sempre le funzioni esportate da `api.ts`

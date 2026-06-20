@@ -596,6 +596,17 @@ async def parse_csv_excel(file: UploadFile = File(...)):
     MAX_SECTIONS = 20
     sections = sections[:MAX_SECTIONS]
 
+    # Propagazione supplier_name: GPT spesso lo mette solo nella prima sezione
+    # (quando il fornitore è dichiarato una volta in cima al file). Le sezioni
+    # successive con fornitore vuoto ereditano l'ultimo fornitore trovato.
+    _last_supplier = ""
+    for _sec in sections:
+        _meta = _sec.setdefault("metadata", {})
+        if _meta.get("supplier_name"):
+            _last_supplier = _meta["supplier_name"]
+        elif _last_supplier:
+            _meta["supplier_name"] = _last_supplier
+
     documents = []
     for section in sections:
         column_mapping = {

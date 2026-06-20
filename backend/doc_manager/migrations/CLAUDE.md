@@ -11,6 +11,9 @@ Migration Django auto-generate per l'app `doc_manager`. Ogni migration è atomic
 - `0005_add_appsettings.py` — modello AppSettings singleton
 - `0006_discrepancy_llm_suggestion_discrepancy_operator_note_and_more.py` — Discrepancy esteso (llm_suggestion, operator_note, resolution, resolved_by, ecc.)
 - `0007_document_supplier_canonical.py` — campo `Document.supplier_canonical` con db_index
+- `0008_security_fields.py` — `AppSettings.daily_document_quota` + `Document.created_by` (FK User, authz object-level)
+- `0009_add_indexes_and_constraints.py` — indici `doc_status_idx`/`doc_created_at_idx`/`recon_status_idx` + constraint `unique_reconciliation_pair` (anti-duplicati)
+- `0010_document_file_hash.py` — `Document.file_hash` (SHA-256 del contenuto, dedup upload)
 
 ## Convenzioni
 - **Non editare migration già applicate in produzione** — creare una nuova migration corretta

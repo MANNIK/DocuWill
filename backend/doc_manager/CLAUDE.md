@@ -9,15 +9,17 @@ Unica app Django del progetto. Contiene modelli, serializzatori, view API, URL, 
 - `urls.py` — tabella route completa: documents, reconciliations, suppliers, inbox WhatsApp, settings, search, notifications, dashboard stats, auth/me, dev/reset
 - `serializers.py` — usa `source="get_X_display"` per i label dei choices
 - `tasks.py` — `process_document_task` Celery: chiama `/parse/csv` o `/ocr/upload` dell'ai_service, poi `find_and_reconcile`
-- `reconciliation.py` — pipeline L1 (math) → L2 (GPT semantic) → L3 (decide); `find_and_reconcile` è l'entry point; embedding cache su Redis DB 1
-- `utils.py` — `normalize_supplier`, `_normalize_for_match`, `canonical_supplier_name` (con rapidfuzz fuzzy)
+- `reconciliation.py` — pipeline L1 (math) → L2 (GPT semantic) → L3 (decide); `find_and_reconcile` è l'entry point; embedding cache su Redis DB 1; prefiltro `supplier_canonical` + cap `MAX_RECON_CANDIDATES=25`
+- `tariff_reconciliation.py` — confronto deterministico (zero GPT) per tariffari/doc non-standard: `reconcile_nonstandard()` normalizza i due formati di `raw_data` (CSV vs OCR), classifica le colonne (chiave/numerico/valuta), allinea per chiave e confronta con tolleranza
+- `throttling.py` — throttle scoped: `UploadBurstThrottle`, `RegisterThrottle`, `WebhookThrottle`, `LoginBurstThrottle` (mai in `DEFAULT_THROTTLE_CLASSES` — romperebbe il polling UI)
+- `utils.py` — `is_safe_external_url()` (anti-SSRF), `normalize_supplier`, `_normalize_for_match`, `canonical_supplier_name` (con rapidfuzz fuzzy)
 
 ## Dipendenze cross-folder (CRITICO)
 - `utils.py` `_COMPANY_SUFFIXES` e `_normalize_for_match` DEVONO restare sincronizzati con `ai_service/utils/supplier.py` — calcolano la stessa cache key Redis DB 2
 
 ## Convenzioni
 - Importare modelli dentro le funzioni Celery (non a livello modulo) — evita circular import
-- Redis DB 0 = broker, DB 1 = embeddings, DB 2 = CSV column-mapping cache
+- Redis DB 0 = broker, DB 1 = embeddings, DB 2 = CSV column-mapping cache, DB 3 = Django cache (throttle)
 - `_update_document()` e `_save_ocr_result()` sono helpers interni a `tasks.py` — non esportarli
 - I documenti con `source=IMAGE` usano `/ocr/upload`; con `source=UPLOAD` usano `/parse/csv`
 
