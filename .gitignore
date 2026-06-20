@@ -7,3 +7,7 @@ __pycache__/
 node_modules/
 postgres_data/
 .DS_Store
+
+# Database locale e media caricati a runtime (non vanno condivisi)
+*.sqlite3
+backend/media/
